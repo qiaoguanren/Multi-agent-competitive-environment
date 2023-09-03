@@ -140,7 +140,8 @@ class QCNetDecoder(nn.Module):
 
     def forward(self,
                 data: HeteroData,
-                scene_enc: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+                scene_enc: Mapping[str, torch.Tensor], flag: int) -> Dict[str, torch.Tensor]:
+        #if flag==0 or flag==1:
         pos_m = data['agent']['position'][:, self.num_historical_steps - 1, :self.input_dim]
         head_m = data['agent']['heading'][:, self.num_historical_steps - 1]
         head_vector_m = torch.stack([head_m.cos(), head_m.sin()], dim=-1)
@@ -155,7 +156,7 @@ class QCNetDecoder(nn.Module):
         mask_dst = data['agent']['predict_mask'].any(dim=-1, keepdim=True).repeat(1, self.num_modes)
 
         pos_t = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim].reshape(-1, self.input_dim)
-        head_t = data['agent']['position'][:, :self.num_historical_steps].reshape(-1)
+        head_t = data['agent']['heading'][:, :self.num_historical_steps].reshape(-1)
         edge_index_t2m = bipartite_dense_to_sparse(mask_src.unsqueeze(2) & mask_dst[:, -1:].unsqueeze(1))
         rel_pos_t2m = pos_t[edge_index_t2m[0]] - pos_m[edge_index_t2m[1]]
         rel_head_t2m = wrap_angle(head_t[edge_index_t2m[0]] - head_m[edge_index_t2m[1]])
@@ -214,9 +215,25 @@ class QCNetDecoder(nn.Module):
         scales_propose_pos: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
         locs_propose_head: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
         concs_propose_head: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
+
+        if flag==2:
+
+            gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
+            gt = gt[..., :self.output_dim].unsqueeze(1).repeat(1,6,1,1)
+            #has_nan = torch.isnan(gt).any().item()
+            #print(has_nan)  # 输出: True
+            #has_none = any([value is None for list in gt for sublist in list for ssublist in sublist for value in ssublist])
+            #print(has_none)  # 输出: True
+
         for t in range(self.num_recurrent_steps):
             for i in range(self.num_layers):
-                m = m.reshape(-1, self.hidden_dim)
+                if flag!=2:
+                    m = m.reshape(-1, self.hidden_dim)
+                else:
+                    #m = self.y_emb(data['agent']['target'][..., :self.output_dim].detach().view(-1, self.output_dim))
+                    m = self.y_emb(gt.detach().view(-1, self.output_dim))
+                    m = m.reshape(-1, self.num_future_steps, self.hidden_dim).transpose(0, 1)
+                    m = self.traj_emb(m, self.traj_emb_h0.unsqueeze(1).repeat(1, m.size(1), 1))[1].squeeze(0)
                 m = self.t2m_propose_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
                 m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
                 m = self.pl2m_propose_attn_layers[i]((x_pl, m), r_pl2m, edge_index_pl2m)
@@ -251,8 +268,10 @@ class QCNetDecoder(nn.Module):
             conc_propose_head = scale_propose_pos.new_zeros((scale_propose_pos.size(0), self.num_modes,
                                                              self.num_future_steps, 1))
             m = self.y_emb(loc_propose_pos.detach().view(-1, self.output_dim))
+        
         m = m.reshape(-1, self.num_future_steps, self.hidden_dim).transpose(0, 1)
         m = self.traj_emb(m, self.traj_emb_h0.unsqueeze(1).repeat(1, m.size(1), 1))[1].squeeze(0)
+        print(m.shape)
         for i in range(self.num_layers):
             m = self.t2m_refine_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
             m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)

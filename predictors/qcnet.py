@@ -34,6 +34,10 @@ from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
 
+import warnings
+ 
+warnings.filterwarnings("ignore")
+
 try:
     from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
 except ImportError:
@@ -153,9 +157,12 @@ class QCNet(pl.LightningModule):
 
         self.test_predictions = dict()
 
-    def forward(self, data: HeteroData):
+    def forward(self, data: HeteroData, flag: int):
         scene_enc = self.encoder(data)
-        pred = self.decoder(data, scene_enc)
+        pred = self.decoder(data, scene_enc, flag)
+        if flag==1:
+            flag=2
+            pred = self.decoder(data, scene_enc, flag)
         return pred
 
     def training_step(self,
@@ -165,7 +172,7 @@ class QCNet(pl.LightningModule):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data)
+        pred = self(data,1)
         if self.output_head:
             traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
                                       pred['loc_propose_head'],
@@ -187,6 +194,7 @@ class QCNet(pl.LightningModule):
         best_mode = l2_norm.argmin(dim=-1)
         traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
         traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+
         reg_loss_propose = self.reg_loss(traj_propose_best,
                                          gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -213,7 +221,7 @@ class QCNet(pl.LightningModule):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data)
+        pred = self(data,0)
         if self.output_head:
             traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
                                       pred['loc_propose_head'],
@@ -233,8 +241,11 @@ class QCNet(pl.LightningModule):
         l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
+        #torch.save(gt, f"./saved_tensors/gt_{batch_idx}.pt")
         traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
         traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+        #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{batch_idx}.pt")
+        #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{batch_idx}.pt")
         reg_loss_propose = self.reg_loss(traj_propose_best,
                                          gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -253,7 +264,7 @@ class QCNet(pl.LightningModule):
         self.log('val_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
                  sync_dist=True)
         self.log('val_cls_loss', cls_loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-
+     
         if self.dataset == 'argoverse_v2':
             eval_mask = data['agent']['category'] == 3
         else:
@@ -285,6 +296,14 @@ class QCNet(pl.LightningModule):
         self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_minFHE', self.minFHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_MR', self.MR, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
+        print('self.Brier')
+        print(self.Brier.compute())
+        print('self.minADE')
+        print(self.minADE.compute())
+        print('self.minFDE')
+        print(self.minFDE.compute())
+        print('self.MR')
+        print(self.MR.compute())
 
     def test_step(self,
                   data,
@@ -328,11 +347,12 @@ class QCNet(pl.LightningModule):
                 self.test_predictions[data['scenario_id']] = (pi_eval[0], {eval_id[0]: traj_eval[0]})
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
-
-    def on_test_end(self):
         if self.dataset == 'argoverse_v2':
+            self.submission_dir='/home/guanren/QCNet'
+            self.submission_file_name='submission_batch8'
             ChallengeSubmission(self.test_predictions).to_parquet(
                 Path(self.submission_dir) / f'{self.submission_file_name}.parquet')
+                #Path(self.submission_dir) / '{data[scenario_id]}.parquet'.format(data=data))
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
 
@@ -400,6 +420,6 @@ class QCNet(pl.LightningModule):
         parser.add_argument('--lr', type=float, default=5e-4)
         parser.add_argument('--weight_decay', type=float, default=1e-4)
         parser.add_argument('--T_max', type=int, default=64)
-        parser.add_argument('--submission_dir', type=str, default='./')
+        parser.add_argument('--submission_dir', type=str, default='../')
         parser.add_argument('--submission_file_name', type=str, default='submission')
         return parent_parser
