@@ -216,16 +216,9 @@ class QCNetDecoder(nn.Module):
         locs_propose_head: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
         concs_propose_head: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
 
-        if flag==2:
-            m = self.y_emb(data['agent']['target'][..., :self.output_dim].detach().view(-1, self.output_dim))
-
         for t in range(self.num_recurrent_steps):
             for i in range(self.num_layers):
-                if flag==2:
-                    m = m.reshape(-1, self.num_future_steps, self.hidden_dim).transpose(0, 1)
-                    m = self.traj_emb(m, self.traj_emb_h0.unsqueeze(1).repeat(1, m.size(1), 1))[1].squeeze(0)
-                else:
-                    m = m.reshape(-1, self.hidden_dim)
+                m = m.reshape(-1, self.hidden_dim)
                 m = self.t2m_propose_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
                 m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
                 m = self.pl2m_propose_attn_layers[i]((x_pl, m), r_pl2m, edge_index_pl2m)

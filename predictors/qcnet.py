@@ -31,7 +31,7 @@ from metrics import minADE
 from metrics import minAHE
 from metrics import minFDE
 from metrics import minFHE
-from modules import QCNetDecoder
+from modules.decoder import QCNetDecoder
 from modules import QCNetEncoder
 
 import warnings
@@ -156,13 +156,11 @@ class QCNet(pl.LightningModule):
         self.MR = MR(max_guesses=6)
 
         self.test_predictions = dict()
+        self.val_predictions = dict()
 
     def forward(self, data: HeteroData, flag: int):
         scene_enc = self.encoder(data)
         pred = self.decoder(data, scene_enc, flag)
-        if flag==1:
-            flag=2
-            pred = self.decoder(data, scene_enc, flag)
         return pred
 
     def training_step(self,
@@ -241,11 +239,10 @@ class QCNet(pl.LightningModule):
         l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
-        #torch.save(gt, f"./saved_tensors/gt_{batch_idx}.pt")
+        
         traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
         traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-        #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{batch_idx}.pt")
-        #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{batch_idx}.pt")
+        
         reg_loss_propose = self.reg_loss(traj_propose_best,
                                          gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -271,6 +268,7 @@ class QCNet(pl.LightningModule):
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
         valid_mask_eval = reg_mask[eval_mask]
         traj_eval = traj_refine[eval_mask, :, :, :self.output_dim + self.output_head]
+
         if not self.output_head:
             traj_2d_with_start_pos_eval = torch.cat([traj_eval.new_zeros((traj_eval.size(0), self.num_modes, 1, 2)),
                                                      traj_eval[..., :2]], dim=-2)
@@ -279,7 +277,41 @@ class QCNet(pl.LightningModule):
             traj_eval = torch.cat([traj_eval, head_eval.unsqueeze(-1)], dim=-1)
         pi_eval = F.softmax(pi[eval_mask], dim=-1)
         gt_eval = gt[eval_mask]
-
+        
+        origin_eval = data['agent']['position'][eval_mask, self.num_historical_steps - 1]
+        theta_eval = data['agent']['heading'][eval_mask, self.num_historical_steps - 1]
+        origin_traj = data['agent']['position'][eval_mask, :self.num_historical_steps, :self.output_dim]
+        cos, sin = theta_eval.cos(), theta_eval.sin()
+        rot_mat = torch.zeros(eval_mask.sum(), 2, 2, device=self.device)
+        rot_mat[:, 0, 0] = cos
+        rot_mat[:, 0, 1] = sin
+        rot_mat[:, 1, 0] = -sin
+        rot_mat[:, 1, 1] = cos
+        traj_eval_viz = torch.matmul(traj_refine[eval_mask, :, :, :2],
+                                 rot_mat.unsqueeze(1)) + origin_eval[:, :2].reshape(-1, 1, 1, 2)
+        origin_traj = origin_traj.unsqueeze(1).repeat(1,6,1,1)
+        traj_eval_viz = torch.cat([origin_traj,traj_eval_viz],dim=2)
+        if self.dataset == 'argoverse_v2':
+            eval_id = list(compress(list(chain(*data['agent']['id'])), eval_mask))
+            if isinstance(data, Batch):
+                for i in range(data.num_graphs):
+                    file_name = str(data['scenario_id'][i])
+                    #torch.save(gt, f"./saved_tensors/gt_{file_name}.pt")
+                    #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{file_name}.pt")
+                    #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{file_name}.pt")
+                    self.val_predictions[data['scenario_id'][i]] = (pi_eval[i].cpu().numpy(), {eval_id[i]: traj_eval_viz[i].cpu().numpy()})
+            else:
+                self.val_predictions[data['scenario_id']] = (pi_eval[0].cpu().numpy(), {eval_id[0]: traj_eval_viz[0].cpu().numpy()})
+        else:
+            raise ValueError('{} is not a valid dataset'.format(self.dataset))
+        if self.dataset == 'argoverse_v2':
+            self.submission_dir='/home/guanren/QCNet/submission'
+            self.submission_file_name='submission_batch8_val_'+str(batch_idx)
+            ChallengeSubmission(self.val_predictions).to_parquet(
+                Path(self.submission_dir) / f'{self.submission_file_name}.parquet')
+                #Path(self.submission_dir) / '{data[scenario_id]}.parquet'.format(data=data))
+        else:
+            raise ValueError('{} is not a valid dataset'.format(self.dataset))
         self.Brier.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
                           valid_mask=valid_mask_eval)
         self.minADE.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
