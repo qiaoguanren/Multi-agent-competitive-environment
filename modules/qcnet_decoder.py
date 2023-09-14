@@ -116,21 +116,21 @@ class QCNetDecoder(nn.Module):
         self.m2m_refine_attn_layer = AttentionLayer(hidden_dim=hidden_dim, num_heads=num_heads, head_dim=head_dim,
                                                     dropout=dropout, bipartite=False, has_pos_emb=False)
         self.to_loc_propose_pos = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                           output_dim=num_future_steps * output_dim // num_recurrent_steps)
+                                           output_dim=output_dim)
         self.to_scale_propose_pos = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                             output_dim=num_future_steps * output_dim // num_recurrent_steps)
+                                             output_dim=output_dim)
         self.to_loc_refine_pos = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                          output_dim=num_future_steps * output_dim)
+                                          output_dim=output_dim)
         self.to_scale_refine_pos = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                            output_dim=num_future_steps * output_dim)
+                                            output_dim=output_dim)
         if output_head:
             self.to_loc_propose_head = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                                output_dim=num_future_steps // num_recurrent_steps)
+                                                output_dim=output_dim)
             self.to_conc_propose_head = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                                 output_dim=num_future_steps // num_recurrent_steps)
-            self.to_loc_refine_head = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=num_future_steps)
+                                                 output_dim=output_dim)
+            self.to_loc_refine_head = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim, output_dim=output_dim)
             self.to_conc_refine_head = MLPLayer(input_dim=hidden_dim, hidden_dim=hidden_dim,
-                                                output_dim=num_future_steps)
+                                                output_dim=output_dim)
         else:
             self.to_loc_propose_head = None
             self.to_conc_propose_head = None
@@ -141,32 +141,35 @@ class QCNetDecoder(nn.Module):
 
     def forward(self,
                 data: HeteroData,
-                scene_enc: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        #if flag==0 or flag==1:
-        pos_m = data['agent']['position'][:, self.num_historical_steps - 1, :self.input_dim]
-        head_m = data['agent']['heading'][:, self.num_historical_steps - 1]
+                scene_enc: Mapping[str, torch.Tensor],iter: int) -> Dict[str, torch.Tensor]:
+
+        pos_m = data['agent']['position'][:, self.num_historical_steps - 1 + iter, :self.input_dim]
+        head_m = data['agent']['heading'][:, self.num_historical_steps - 1 + iter]
         head_vector_m = torch.stack([head_m.cos(), head_m.sin()], dim=-1)
 
         x_t = scene_enc['x_a'].reshape(-1, self.hidden_dim)
-        x_pl = scene_enc['x_pl'][:, self.num_historical_steps - 1].repeat(self.num_modes, 1)
+        x_pl = scene_enc['x_pl'][:, self.num_historical_steps - 1 + iter].repeat(self.num_modes, 1)
         x_a = scene_enc['x_a'][:, -1].repeat(self.num_modes, 1)
         m = self.mode_emb.weight.repeat(scene_enc['x_a'].size(0), 1)
 
-        mask_src = data['agent']['valid_mask'][:, :self.num_historical_steps].contiguous()
-        mask_src[:, :self.num_historical_steps - self.num_t2m_steps] = False
+        mask_src = data['agent']['valid_mask'][:, :self.num_historical_steps+iter].contiguous()
+        mask_src[:, :(self.num_historical_steps + iter - self.num_t2m_steps - iter)] = False
         mask_dst = data['agent']['predict_mask'].any(dim=-1, keepdim=True).repeat(1, self.num_modes)
 
-        pos_t = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim].reshape(-1, self.input_dim)
-        head_t = data['agent']['heading'][:, :self.num_historical_steps].reshape(-1)
+        pos_t = data['agent']['position'][:, :self.num_historical_steps+iter, :self.input_dim].reshape(-1, self.input_dim)
+        head_t = data['agent']['heading'][:, :self.num_historical_steps+iter].reshape(-1)
         edge_index_t2m = bipartite_dense_to_sparse(mask_src.unsqueeze(2) & mask_dst[:, -1:].unsqueeze(1))
+
         rel_pos_t2m = pos_t[edge_index_t2m[0]] - pos_m[edge_index_t2m[1]]
+
         rel_head_t2m = wrap_angle(head_t[edge_index_t2m[0]] - head_m[edge_index_t2m[1]])
         r_t2m = torch.stack(
             [torch.norm(rel_pos_t2m[:, :2], p=2, dim=-1),
              angle_between_2d_vectors(ctr_vector=head_vector_m[edge_index_t2m[1]], nbr_vector=rel_pos_t2m[:, :2]),
              rel_head_t2m,
-             (edge_index_t2m[0] % self.num_historical_steps) - self.num_historical_steps + 1], dim=-1)
+             (edge_index_t2m[0] % (self.num_historical_steps+iter)) - self.num_historical_steps - iter + 1], dim=-1)
         r_t2m = self.r_t2m_emb(continuous_inputs=r_t2m, categorical_embs=None)
+        
         edge_index_t2m = bipartite_dense_to_sparse(mask_src.unsqueeze(2) & mask_dst.unsqueeze(1))
         r_t2m = r_t2m.repeat_interleave(repeats=self.num_modes, dim=0)
 
@@ -212,51 +215,31 @@ class QCNetDecoder(nn.Module):
 
         edge_index_m2m = dense_to_sparse(mask_dst.unsqueeze(2) & mask_dst.unsqueeze(1))[0]
 
-        locs_propose_pos: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
-        scales_propose_pos: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
-        locs_propose_head: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
-        concs_propose_head: List[Optional[torch.Tensor]] = [None] * self.num_recurrent_steps
-        flag = 0
+        locs_propose_pos: List[Optional[torch.Tensor]] = [None]
+        scales_propose_pos: List[Optional[torch.Tensor]] = [None]
+        locs_propose_head: List[Optional[torch.Tensor]] = [None]
+        concs_propose_head: List[Optional[torch.Tensor]] = [None]
 
-        if random.randint(1, 101) > 70:
-            flag = 1
-            gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-            gt = gt[..., :self.output_dim].unsqueeze(1).repeat(1,6,1,1)
-            #has_nan = torch.isnan(gt).any().item()
-            #print(has_nan)  # 输出: True
-            #has_none = any([value is None for list in gt for sublist in list for ssublist in sublist for value in ssublist])
-            #print(has_none)  # 输出: True
-
-        for t in range(self.num_recurrent_steps):
-            for i in range(self.num_layers):
-                if flag!=1:
-                    m = m.reshape(-1, self.hidden_dim)
-                else:
-                    if t==0:
-                        #m = self.y_emb(data['agent']['target'][..., :self.output_dim].detach().view(-1, self.output_dim))
-                        m = self.y_emb(gt.detach().view(-1, self.output_dim))
-                        m = m.reshape(-1, self.num_future_steps, self.hidden_dim).transpose(0, 1)
-                        m = self.traj_emb(m, self.traj_emb_h0.unsqueeze(1).repeat(1, m.size(1), 1))[1].squeeze(0)
-                    else:
-                        m = m.reshape(-1, self.hidden_dim)
-                m = self.t2m_propose_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
-                m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
-                m = self.pl2m_propose_attn_layers[i]((x_pl, m), r_pl2m, edge_index_pl2m)
-                m = self.a2m_propose_attn_layers[i]((x_a, m), r_a2m, edge_index_a2m)
-                m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
-            m = self.m2m_propose_attn_layer(m, None, edge_index_m2m)
-            m = m.reshape(-1, self.num_modes, self.hidden_dim)
-            locs_propose_pos[t] = self.to_loc_propose_pos(m)
-            scales_propose_pos[t] = self.to_scale_propose_pos(m)
-            if self.output_head:
-                locs_propose_head[t] = self.to_loc_propose_head(m)
-                concs_propose_head[t] = self.to_conc_propose_head(m)
+        #for i in range(self.num_layers):
+            #m = m.reshape(-1, self.hidden_dim)
+            #m = self.t2m_propose_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
+            #m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
+            #m = self.pl2m_propose_attn_layers[i]((x_pl, m), r_pl2m, edge_index_pl2m)
+            #m = self.a2m_propose_attn_layers[i]((x_a, m), r_a2m, edge_index_a2m)
+        m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
+        m = self.m2m_propose_attn_layer(m, None, edge_index_m2m)
+        m = m.reshape(-1, self.num_modes, self.hidden_dim)
+        locs_propose_pos[0] = self.to_loc_propose_pos(m)
+        scales_propose_pos[0] = self.to_scale_propose_pos(m)
+        if self.output_head:
+            locs_propose_head[0] = self.to_loc_propose_head(m)
+            concs_propose_head[0] = self.to_conc_propose_head(m)
         loc_propose_pos = torch.cumsum(
-            torch.cat(locs_propose_pos, dim=-1).view(-1, self.num_modes, self.num_future_steps, self.output_dim),
+            torch.cat(locs_propose_pos, dim=-1).view(-1, self.num_modes, 1, self.output_dim),
             dim=-2)
         scale_propose_pos = torch.cumsum(
             F.elu_(
-                torch.cat(scales_propose_pos, dim=-1).view(-1, self.num_modes, self.num_future_steps, self.output_dim),
+                torch.cat(scales_propose_pos, dim=-1).view(-1, self.num_modes, 1, self.output_dim),
                 alpha=1.0) +
             1.0,
             dim=-2) + 0.1
@@ -269,12 +252,12 @@ class QCNetDecoder(nn.Module):
                                       wrap_angle(loc_propose_head.detach())], dim=-1).view(-1, self.output_dim + 1))
         else:
             loc_propose_head = loc_propose_pos.new_zeros((loc_propose_pos.size(0), self.num_modes,
-                                                          self.num_future_steps, 1))
+                                                          1, 1))
             conc_propose_head = scale_propose_pos.new_zeros((scale_propose_pos.size(0), self.num_modes,
-                                                             self.num_future_steps, 1))
+                                                             1, 1))
             m = self.y_emb(loc_propose_pos.detach().view(-1, self.output_dim))
         
-        m = m.reshape(-1, self.num_future_steps, self.hidden_dim).transpose(0, 1)
+        m = m.reshape(-1, 1, self.hidden_dim).transpose(0, 1)
         m = self.traj_emb(m, self.traj_emb_h0.unsqueeze(1).repeat(1, m.size(1), 1))[1].squeeze(0)
 
         for i in range(self.num_layers):
@@ -285,21 +268,32 @@ class QCNetDecoder(nn.Module):
             m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
         m = self.m2m_refine_attn_layer(m, None, edge_index_m2m)
         m = m.reshape(-1, self.num_modes, self.hidden_dim)
-        loc_refine_pos = self.to_loc_refine_pos(m).view(-1, self.num_modes, self.num_future_steps, self.output_dim)
+        loc_refine_pos = self.to_loc_refine_pos(m).view(-1, self.num_modes, 1, self.output_dim)
         loc_refine_pos = loc_refine_pos + loc_propose_pos.detach()
         scale_refine_pos = F.elu_(
-            self.to_scale_refine_pos(m).view(-1, self.num_modes, self.num_future_steps, self.output_dim),
+            self.to_scale_refine_pos(m).view(-1, self.num_modes, 1, self.output_dim),
             alpha=1.0) + 1.0 + 0.1
         if self.output_head:
             loc_refine_head = torch.tanh(self.to_loc_refine_head(m).unsqueeze(-1)) * math.pi
             loc_refine_head = loc_refine_head + loc_propose_head.detach()
             conc_refine_head = 1.0 / (F.elu_(self.to_conc_refine_head(m).unsqueeze(-1)) + 1.0 + 0.02)
         else:
-            loc_refine_head = loc_refine_pos.new_zeros((loc_refine_pos.size(0), self.num_modes, self.num_future_steps,
+            loc_refine_head = loc_refine_pos.new_zeros((loc_refine_pos.size(0), self.num_modes, 1,
                                                         1))
             conc_refine_head = scale_refine_pos.new_zeros((scale_refine_pos.size(0), self.num_modes,
-                                                           self.num_future_steps, 1))
+                                                           1, 1))
         pi = self.to_pi(m).squeeze(-1)
+
+        reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps+iter].unsqueeze(1)
+        one_future_step_propose = torch.cat([loc_propose_pos[..., :self.output_dim], scale_propose_pos[..., :self.output_dim]],dim=-1)
+        one_future_step_refine = torch.cat([loc_refine_pos[..., :self.output_dim], scale_refine_pos[..., :self.output_dim]],dim=-1)
+        gt = torch.cat([data['agent']['target'][:, iter, :self.output_dim], data['agent']['target'][:, iter, -1:]], dim=-1).unsqueeze(1)
+ 
+        l2_norm = (torch.norm(one_future_step_refine[..., :self.output_dim] -
+                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
+        best_mode = l2_norm.argmin(dim=-1)
+        one_future_step_best = one_future_step_refine[torch.arange(one_future_step_refine.size(0)), best_mode][..., :self.input_dim]
+        data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best],dim=1)
 
         return {
             'loc_propose_pos': loc_propose_pos,

@@ -92,7 +92,7 @@ class QCNetMapEncoder(nn.Module):
         )
         self.apply(weight_init)
 
-    def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:
+    def forward(self, data: HeteroData, iter: int) -> Dict[str, torch.Tensor]:
         pos_pt = data['map_point']['position'][:, :self.input_dim].contiguous()
         orient_pt = data['map_point']['orientation'].contiguous()
         pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous()
@@ -167,7 +167,7 @@ class QCNetMapEncoder(nn.Module):
         for i in range(self.num_layers):
             x_pl = self.pt2pl_layers[i]((x_pt, x_pl), r_pt2pl, edge_index_pt2pl)
             x_pl = self.pl2pl_layers[i](x_pl, r_pl2pl, edge_index_pl2pl)
-        x_pl = x_pl.repeat_interleave(repeats=self.num_historical_steps,
-                                      dim=0).reshape(-1, self.num_historical_steps, self.hidden_dim)
+        x_pl = x_pl.repeat_interleave(repeats=self.num_historical_steps+iter,
+                                      dim=0).reshape(-1, self.num_historical_steps+iter, self.hidden_dim)
 
         return {'x_pt': x_pt, 'x_pl': x_pl}

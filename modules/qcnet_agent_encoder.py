@@ -92,20 +92,21 @@ class QCNetAgentEncoder(nn.Module):
 
     def forward(self,
                 data: HeteroData,
+                iter: int,
                 map_enc: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        mask = data['agent']['valid_mask'][:, :self.num_historical_steps].contiguous()
-        pos_a = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim].contiguous()
+        mask = data['agent']['valid_mask'][:, :self.num_historical_steps+iter].contiguous()
+        pos_a = data['agent']['position'][:, :self.num_historical_steps+iter, :self.input_dim].contiguous()
         motion_vector_a = torch.cat([pos_a.new_zeros(data['agent']['num_nodes'], 1, self.input_dim),
                                      pos_a[:, 1:] - pos_a[:, :-1]], dim=1)
-        head_a = data['agent']['heading'][:, :self.num_historical_steps].contiguous()
+        head_a = data['agent']['heading'][:, :self.num_historical_steps+iter].contiguous()
         head_vector_a = torch.stack([head_a.cos(), head_a.sin()], dim=-1)
         pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous()
         orient_pl = data['map_polygon']['orientation'].contiguous()
         if self.dataset == 'argoverse_v2':
-            vel = data['agent']['velocity'][:, :self.num_historical_steps, :self.input_dim].contiguous()
+            vel = data['agent']['velocity'][:, :self.num_historical_steps+iter, :self.input_dim].contiguous()
             length = width = height = None
             categorical_embs = [
-                self.type_a_emb(data['agent']['type'].long()).repeat_interleave(repeats=self.num_historical_steps,
+                self.type_a_emb(data['agent']['type'].long()).repeat_interleave(repeats=self.num_historical_steps+iter,
                                                                                 dim=0),
             ]
         else:
@@ -120,7 +121,7 @@ class QCNetAgentEncoder(nn.Module):
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
         x_a = self.x_a_emb(continuous_inputs=x_a.view(-1, x_a.size(-1)), categorical_embs=categorical_embs)
-        x_a = x_a.view(-1, self.num_historical_steps, self.hidden_dim)
+        x_a = x_a.view(-1, self.num_historical_steps+iter, self.hidden_dim)
 
         pos_t = pos_a.reshape(-1, self.input_dim)
         head_t = head_a.reshape(-1)
@@ -142,17 +143,17 @@ class QCNetAgentEncoder(nn.Module):
         head_s = head_a.transpose(0, 1).reshape(-1)
         head_vector_s = head_vector_a.transpose(0, 1).reshape(-1, 2)
         mask_s = mask.transpose(0, 1).reshape(-1)
-        pos_pl = pos_pl.repeat(self.num_historical_steps, 1)
-        orient_pl = orient_pl.repeat(self.num_historical_steps)
+        pos_pl = pos_pl.repeat(self.num_historical_steps+iter, 1)
+        orient_pl = orient_pl.repeat(self.num_historical_steps+iter)
         if isinstance(data, Batch):
             batch_s = torch.cat([data['agent']['batch'] + data.num_graphs * t
-                                 for t in range(self.num_historical_steps)], dim=0)
+                                 for t in range(self.num_historical_steps+iter)], dim=0)
             batch_pl = torch.cat([data['map_polygon']['batch'] + data.num_graphs * t
-                                  for t in range(self.num_historical_steps)], dim=0)
+                                  for t in range(self.num_historical_steps+iter)], dim=0)
         else:
-            batch_s = torch.arange(self.num_historical_steps,
+            batch_s = torch.arange(self.num_historical_steps+iter,
                                    device=pos_a.device).repeat_interleave(data['agent']['num_nodes'])
-            batch_pl = torch.arange(self.num_historical_steps,
+            batch_pl = torch.arange(self.num_historical_steps+iter,
                                     device=pos_pl.device).repeat_interleave(data['map_polygon']['num_nodes'])
         edge_index_pl2a = radius(x=pos_s[:, :2], y=pos_pl[:, :2], r=self.pl2a_radius, batch_x=batch_s, batch_y=batch_pl,
                                  max_num_neighbors=300)
@@ -178,11 +179,11 @@ class QCNetAgentEncoder(nn.Module):
         for i in range(self.num_layers):
             x_a = x_a.reshape(-1, self.hidden_dim)
             x_a = self.t_attn_layers[i](x_a, r_t, edge_index_t)
-            x_a = x_a.reshape(-1, self.num_historical_steps,
+            x_a = x_a.reshape(-1, self.num_historical_steps+iter,
                               self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
             x_a = self.pl2a_attn_layers[i]((map_enc['x_pl'].transpose(0, 1).reshape(-1, self.hidden_dim), x_a), r_pl2a,
                                            edge_index_pl2a)
             x_a = self.a2a_attn_layers[i](x_a, r_a2a, edge_index_a2a)
-            x_a = x_a.reshape(self.num_historical_steps, -1, self.hidden_dim).transpose(0, 1)
+            x_a = x_a.reshape(self.num_historical_steps+iter, -1, self.hidden_dim).transpose(0, 1)
 
         return {'x_a': x_a}

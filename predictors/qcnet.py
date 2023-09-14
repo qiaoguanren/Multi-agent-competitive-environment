@@ -158,9 +158,9 @@ class QCNet(pl.LightningModule):
         self.test_predictions = dict()
         self.val_predictions = dict()
 
-    def forward(self, data: HeteroData, flag: int):
+    def forward(self, data: HeteroData):
         scene_enc = self.encoder(data)
-        pred = self.decoder(data, scene_enc, flag)
+        pred = self.decoder(data, scene_enc)
         return pred
 
     def training_step(self,
@@ -170,7 +170,7 @@ class QCNet(pl.LightningModule):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data,1)
+        pred = self(data)
         if self.output_head:
             traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
                                       pred['loc_propose_head'],
@@ -219,7 +219,7 @@ class QCNet(pl.LightningModule):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data,0)
+        pred = self(data)
         if self.output_head:
             traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
                                       pred['loc_propose_head'],
@@ -242,6 +242,10 @@ class QCNet(pl.LightningModule):
         
         traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
         traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+
+        #torch.save(gt, f"./saved_tensors/gt_{batch_idx}.pt")
+        #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{batch_idx}.pt")
+        #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{batch_idx}.pt")
         
         reg_loss_propose = self.reg_loss(traj_propose_best,
                                          gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
@@ -295,10 +299,6 @@ class QCNet(pl.LightningModule):
             eval_id = list(compress(list(chain(*data['agent']['id'])), eval_mask))
             if isinstance(data, Batch):
                 for i in range(data.num_graphs):
-                    file_name = str(data['scenario_id'][i])
-                    #torch.save(gt, f"./saved_tensors/gt_{file_name}.pt")
-                    #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{file_name}.pt")
-                    #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{file_name}.pt")
                     self.val_predictions[data['scenario_id'][i]] = (pi_eval[i].cpu().numpy(), {eval_id[i]: traj_eval_viz[i].cpu().numpy()})
             else:
                 self.val_predictions[data['scenario_id']] = (pi_eval[0].cpu().numpy(), {eval_id[0]: traj_eval_viz[0].cpu().numpy()})

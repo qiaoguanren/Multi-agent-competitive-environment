@@ -159,8 +159,18 @@ class QCNet(pl.LightningModule):
         self.val_predictions = dict()
 
     def forward(self, data: HeteroData):
-        scene_enc = self.encoder(data)
-        pred = self.decoder(data, scene_enc)
+        pred = dict()
+        data['agent']['position'] = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim]
+        scene_enc = self.encoder(data,0)
+        pred = self.decoder(data,scene_enc,0)
+
+        for i in range(1, self.num_future_steps):
+            #data['agent']['predict_mask'][:, :self.num_historical_steps+i] = False     
+            #for j in range(data['agent']['valid_mask'].size(0)):
+            #    if not data['agent']['valid_mask'][j,self.num_historical_steps+i-1]:
+            #        data['agent']['predict_mask'][j, self.num_historical_steps+i:] = False
+            scene_enc = self.encoder(data,i)
+            pred = self.decoder(data, scene_enc, i)
         return pred
 
     def training_step(self,
@@ -171,32 +181,35 @@ class QCNet(pl.LightningModule):
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
         pred = self(data)
-        if self.output_head:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['loc_propose_head'],
-                                      pred['scale_propose_pos'][..., :self.output_dim],
-                                      pred['conc_propose_head']], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['loc_refine_head'],
-                                     pred['scale_refine_pos'][..., :self.output_dim],
-                                     pred['conc_refine_head']], dim=-1)
-        else:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+        #if self.output_head:
+        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+        #                              pred['loc_propose_head'],
+        #                              pred['scale_propose_pos'][..., :self.output_dim],
+        #                              pred['conc_propose_head']], dim=-1)
+        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+        #                             pred['loc_refine_head'],
+        #                             pred['scale_refine_pos'][..., :self.output_dim],
+        #                             pred['conc_refine_head']], dim=-1)
+        #else:
+        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+        #                              pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
+        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+        #                             pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
-                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        best_mode = l2_norm.argmin(dim=-1)
-        traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+        #l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
+        #                      gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
+        #best_mode = l2_norm.argmin(dim=-1)
+        #traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
+        #traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
 
-        reg_loss_propose = self.reg_loss(traj_propose_best,
-                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_propose = reg_loss_propose.mean()
+        traj_refine_best = data['agent']['position'][:, self.num_historical_steps:, :self.output_dim]
+        traj_refine = traj_refine_best.unsqueeze(1).repeat(1,6,1,1)
+        
+        #reg_loss_propose = self.reg_loss(traj_propose_best,
+        #                                 gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
+        #reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
+        #reg_loss_propose = reg_loss_propose.mean()
         reg_loss_refine = self.reg_loss(traj_refine_best,
                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -206,10 +219,10 @@ class QCNet(pl.LightningModule):
                                  prob=pi,
                                  mask=reg_mask[:, -1:]) * cls_mask
         cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
-        self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+        #self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        loss = reg_loss_propose + reg_loss_refine + cls_loss
+        loss = reg_loss_refine + cls_loss
         return loss
 
     def validation_step(self,
@@ -220,33 +233,37 @@ class QCNet(pl.LightningModule):
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
         pred = self(data)
-        if self.output_head:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['loc_propose_head'],
-                                      pred['scale_propose_pos'][..., :self.output_dim],
-                                      pred['conc_propose_head']], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['loc_refine_head'],
-                                     pred['scale_refine_pos'][..., :self.output_dim],
-                                     pred['conc_refine_head']], dim=-1)
-        else:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+        #if self.output_head:
+        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+        #                              pred['loc_propose_head'],
+        #                              pred['scale_propose_pos'][..., :self.output_dim],
+        #                              pred['conc_propose_head']], dim=-1)
+        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+        #                             pred['loc_refine_head'],
+        #                             pred['scale_refine_pos'][..., :self.output_dim],
+        #                             pred['conc_refine_head']], dim=-1)
+        #else:
+        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+        #                              pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
+        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+        #                             pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
-                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        best_mode = l2_norm.argmin(dim=-1)
-        
-        traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-        
-        reg_loss_propose = self.reg_loss(traj_propose_best,
-                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_propose = reg_loss_propose.mean()
+        #l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
+        #                      gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
+        #best_mode = l2_norm.argmin(dim=-1)
+        #
+        #traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
+        #traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+        #
+        #reg_loss_propose = self.reg_loss(traj_propose_best,
+        #                                 gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
+        #reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
+        #reg_loss_propose = reg_loss_propose.mean()
+
+        traj_refine_best = data['agent']['position'][:, self.num_historical_steps:, :self.output_dim]
+        traj_refine = traj_refine_best.unsqueeze(1).repeat(1,6,1,1)       
+
         reg_loss_refine = self.reg_loss(traj_refine_best,
                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -256,8 +273,8 @@ class QCNet(pl.LightningModule):
                                  prob=pi,
                                  mask=reg_mask[:, -1:]) * cls_mask
         cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
-        self.log('val_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
-                 sync_dist=True)
+        #self.log('val_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
+        #         sync_dist=True)
         self.log('val_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
                  sync_dist=True)
         self.log('val_cls_loss', cls_loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
@@ -291,29 +308,25 @@ class QCNet(pl.LightningModule):
                                  rot_mat.unsqueeze(1)) + origin_eval[:, :2].reshape(-1, 1, 1, 2)
         origin_traj = origin_traj.unsqueeze(1).repeat(1,6,1,1)
         traj_eval_viz = torch.cat([origin_traj,traj_eval_viz],dim=2)
-        print(traj_eval_viz.shape)
-        print(origin_traj.shape)
-        if self.dataset == 'argoverse_v2':
-            eval_id = list(compress(list(chain(*data['agent']['id'])), eval_mask))
-            if isinstance(data, Batch):
-                for i in range(data.num_graphs):
-                    file_name = str(data['scenario_id'][i])
-                    #torch.save(gt, f"./saved_tensors/gt_{file_name}.pt")
-                    #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{file_name}.pt")
-                    #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{file_name}.pt")
-                    self.val_predictions[data['scenario_id'][i]] = (pi_eval[i].cpu().numpy(), {eval_id[i]: traj_eval_viz[i].cpu().numpy()})
-            else:
-                self.val_predictions[data['scenario_id']] = (pi_eval[0].cpu().numpy(), {eval_id[0]: traj_eval_viz[0].cpu().numpy()})
-        else:
-            raise ValueError('{} is not a valid dataset'.format(self.dataset))
-        if self.dataset == 'argoverse_v2':
-            self.submission_dir='/home/guanren/QCNet/submission'
-            self.submission_file_name='submission_batch8_val_'+str(batch_idx)
-            ChallengeSubmission(self.val_predictions).to_parquet(
-                Path(self.submission_dir) / f'{self.submission_file_name}.parquet')
-                #Path(self.submission_dir) / '{data[scenario_id]}.parquet'.format(data=data))
-        else:
-            raise ValueError('{} is not a valid dataset'.format(self.dataset))
+
+        #if self.dataset == 'argoverse_v2':
+        #    eval_id = list(compress(list(chain(*data['agent']['id'])), eval_mask))
+        #    if isinstance(data, Batch):
+        #        for i in range(data.num_graphs):
+        #            file_name = str(data['scenario_id'][i])
+        #            self.val_predictions[data['scenario_id'][i]] = (pi_eval[i].cpu().numpy(), {eval_id[i]: traj_eval_viz[i].cpu().numpy()})
+        #    else:
+        #        self.val_predictions[data['scenario_id']] = (pi_eval[0].cpu().numpy(), {eval_id[0]: traj_eval_viz[0].cpu().numpy()})
+        #else:
+        #    raise ValueError('{} is not a valid dataset'.format(self.dataset))
+        #if self.dataset == 'argoverse_v2':
+        #    self.submission_dir='/home/guanren/QCNet/submission'
+        #    self.submission_file_name='submission_batch8_val_'+str(batch_idx)
+        #    ChallengeSubmission(self.val_predictions).to_parquet(
+        #        Path(self.submission_dir) / f'{self.submission_file_name}.parquet')
+        #        #Path(self.submission_dir) / '{data[scenario_id]}.parquet'.format(data=data))
+        #else:
+        #    raise ValueError('{} is not a valid dataset'.format(self.dataset))
         self.Brier.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
                           valid_mask=valid_mask_eval)
         self.minADE.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,

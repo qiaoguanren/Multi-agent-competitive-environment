@@ -140,8 +140,8 @@ class QCNetDecoder(nn.Module):
 
     def forward(self,
                 data: HeteroData,
-                scene_enc: Mapping[str, torch.Tensor], flag: int) -> Dict[str, torch.Tensor]:
-        #if flag==0 or flag==1:
+                scene_enc: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+
         pos_m = data['agent']['position'][:, self.num_historical_steps - 1, :self.input_dim]
         head_m = data['agent']['heading'][:, self.num_historical_steps - 1]
         head_vector_m = torch.stack([head_m.cos(), head_m.sin()], dim=-1)
