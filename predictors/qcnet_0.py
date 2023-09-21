@@ -160,17 +160,19 @@ class QCNet(pl.LightningModule):
 
     def forward(self, data: HeteroData):
         pred = dict()
-        data['agent']['position'] = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim]
+        temp = dict()
+        data['agent']['position'] = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim].repeat(1,1,2)
         scene_enc = self.encoder(data,0)
         pred = self.decoder(data,scene_enc,0)
-
         for i in range(1, self.num_future_steps):
-            #data['agent']['predict_mask'][:, :self.num_historical_steps+i] = False     
-            #for j in range(data['agent']['valid_mask'].size(0)):
-            #    if not data['agent']['valid_mask'][j,self.num_historical_steps+i-1]:
-            #        data['agent']['predict_mask'][j, self.num_historical_steps+i:] = False
+            data['agent']['predict_mask'][:, :self.num_historical_steps+i] = False     
+            for j in range(data['agent']['valid_mask'].size(0)):
+                if not data['agent']['valid_mask'][j,self.num_historical_steps+i-1]:
+                    data['agent']['predict_mask'][j, self.num_historical_steps+i:] = False
             scene_enc = self.encoder(data,i)
-            pred = self.decoder(data, scene_enc, i)
+            temp = self.decoder(data, scene_enc, i)
+            pred['loc_refine_pos'] = torch.cat([pred['loc_refine_pos'],temp['loc_refine_pos']], dim=2).detach()
+            pred['scale_refine_pos'] = torch.cat([pred['scale_refine_pos'],temp['scale_refine_pos']], dim=2).detach()
         return pred
 
     def training_step(self,
@@ -181,30 +183,30 @@ class QCNet(pl.LightningModule):
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
         pred = self(data)
-        #if self.output_head:
-        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-        #                              pred['loc_propose_head'],
-        #                              pred['scale_propose_pos'][..., :self.output_dim],
-        #                              pred['conc_propose_head']], dim=-1)
-        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-        #                             pred['loc_refine_head'],
-        #                             pred['scale_refine_pos'][..., :self.output_dim],
-        #                             pred['conc_refine_head']], dim=-1)
-        #else:
-        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-        #                              pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-        #                             pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+        if self.output_head:
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+                                      pred['loc_propose_head'],
+                                      pred['scale_propose_pos'][..., :self.output_dim],
+                                      pred['conc_propose_head']], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+                                     pred['loc_refine_head'],
+                                     pred['scale_refine_pos'][..., :self.output_dim],
+                                     pred['conc_refine_head']], dim=-1)
+        else:
+            #traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+            #                          pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        #l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
-        #                      gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        #best_mode = l2_norm.argmin(dim=-1)
+        l2_norm = (torch.norm(traj_refine[..., :self.output_dim] -
+                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
+        best_mode = l2_norm.argmin(dim=-1)
         #traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        #traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
 
-        traj_refine_best = data['agent']['position'][:, self.num_historical_steps:, :self.output_dim]
-        traj_refine = traj_refine_best.unsqueeze(1).repeat(1,6,1,1)
+        #traj_refine_best = data['agent']['position'][:, self.num_historical_steps:, :]
+        #traj_refine = traj_refine_best.unsqueeze(1).repeat(1,6,1,1)
         
         #reg_loss_propose = self.reg_loss(traj_propose_best,
         #                                 gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
@@ -233,36 +235,42 @@ class QCNet(pl.LightningModule):
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
         pred = self(data)
-        #if self.output_head:
-        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-        #                              pred['loc_propose_head'],
-        #                              pred['scale_propose_pos'][..., :self.output_dim],
-        #                              pred['conc_propose_head']], dim=-1)
-        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-        #                             pred['loc_refine_head'],
-        #                             pred['scale_refine_pos'][..., :self.output_dim],
-        #                             pred['conc_refine_head']], dim=-1)
-        #else:
-        #    traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-        #                              pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-        #    traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-        #                             pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+        if self.output_head:
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+                                      pred['loc_propose_head'],
+                                      pred['scale_propose_pos'][..., :self.output_dim],
+                                      pred['conc_propose_head']], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+                                     pred['loc_refine_head'],
+                                     pred['scale_refine_pos'][..., :self.output_dim],
+                                     pred['conc_refine_head']], dim=-1)
+        else:
+            #traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
+            #                          pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
+                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        #l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
-        #                      gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        #best_mode = l2_norm.argmin(dim=-1)
-        #
+        l2_norm = (torch.norm(traj_refine[..., :self.output_dim] -
+                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
+        best_mode = l2_norm.argmin(dim=-1)
         #traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        #traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-        #
+        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
+
         #reg_loss_propose = self.reg_loss(traj_propose_best,
         #                                 gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         #reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
         #reg_loss_propose = reg_loss_propose.mean()
 
-        traj_refine_best = data['agent']['position'][:, self.num_historical_steps:, :self.output_dim]
-        traj_refine = traj_refine_best.unsqueeze(1).repeat(1,6,1,1)       
+        #traj_refine_best = data['agent']['position'][:, self.num_historical_steps:, :]
+        #traj_refine = traj_refine_best.unsqueeze(1).repeat(1,6,1,1)       
+
+        #has_special = (torch.isnan(traj_refine_best) | torch.isinf(traj_refine_best)).any()
+        #print("Contains NaN or inf:", has_special.item())
+        #print('traj_refine_best_max')
+        #print(torch.max(traj_refine_best))
+        #print('traj_refine_best_min')
+        #print(torch.min(traj_refine_best))
 
         reg_loss_refine = self.reg_loss(traj_refine_best,
                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
@@ -295,19 +303,19 @@ class QCNet(pl.LightningModule):
         pi_eval = F.softmax(pi[eval_mask], dim=-1)
         gt_eval = gt[eval_mask]
         
-        origin_eval = data['agent']['position'][eval_mask, self.num_historical_steps - 1]
-        theta_eval = data['agent']['heading'][eval_mask, self.num_historical_steps - 1]
-        origin_traj = data['agent']['position'][eval_mask, :self.num_historical_steps, :self.output_dim]
-        cos, sin = theta_eval.cos(), theta_eval.sin()
-        rot_mat = torch.zeros(eval_mask.sum(), 2, 2, device=self.device)
-        rot_mat[:, 0, 0] = cos
-        rot_mat[:, 0, 1] = sin
-        rot_mat[:, 1, 0] = -sin
-        rot_mat[:, 1, 1] = cos
-        traj_eval_viz = torch.matmul(traj_refine[eval_mask, :, :, :2],
-                                 rot_mat.unsqueeze(1)) + origin_eval[:, :2].reshape(-1, 1, 1, 2)
-        origin_traj = origin_traj.unsqueeze(1).repeat(1,6,1,1)
-        traj_eval_viz = torch.cat([origin_traj,traj_eval_viz],dim=2)
+        #origin_eval = data['agent']['position'][eval_mask, self.num_historical_steps - 1]
+        #theta_eval = data['agent']['heading'][eval_mask, self.num_historical_steps - 1]
+        #origin_traj = data['agent']['position'][eval_mask, :self.num_historical_steps, :self.output_dim]
+        #cos, sin = theta_eval.cos(), theta_eval.sin()
+        #rot_mat = torch.zeros(eval_mask.sum(), 2, 2, device=self.device)
+        #rot_mat[:, 0, 0] = cos
+        #rot_mat[:, 0, 1] = sin
+        #rot_mat[:, 1, 0] = -sin
+        #rot_mat[:, 1, 1] = cos
+        #traj_eval_viz = torch.matmul(traj_refine[eval_mask, :, :, :2],
+        #                         rot_mat.unsqueeze(1)) + origin_eval[:, :2].reshape(-1, 1, 1, 2)
+        #origin_traj = origin_traj.unsqueeze(1).repeat(1,6,1,1)
+        #traj_eval_viz = torch.cat([origin_traj,traj_eval_viz],dim=2)
 
         #if self.dataset == 'argoverse_v2':
         #    eval_id = list(compress(list(chain(*data['agent']['id'])), eval_mask))

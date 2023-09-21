@@ -221,12 +221,12 @@ class QCNetDecoder(nn.Module):
         concs_propose_head: List[Optional[torch.Tensor]] = [None]
 
         #for i in range(self.num_layers):
-            #m = m.reshape(-1, self.hidden_dim)
-            #m = self.t2m_propose_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
-            #m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
-            #m = self.pl2m_propose_attn_layers[i]((x_pl, m), r_pl2m, edge_index_pl2m)
-            #m = self.a2m_propose_attn_layers[i]((x_a, m), r_a2m, edge_index_a2m)
-        m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
+        #    m = m.reshape(-1, self.hidden_dim)
+        #    m = self.t2m_propose_attn_layers[i]((x_t, m), r_t2m, edge_index_t2m)
+        #    m = m.reshape(-1, self.num_modes, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
+        #    m = self.pl2m_propose_attn_layers[i]((x_pl, m), r_pl2m, edge_index_pl2m)
+        #    m = self.a2m_propose_attn_layers[i]((x_a, m), r_a2m, edge_index_a2m)
+        #    m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
         m = self.m2m_propose_attn_layer(m, None, edge_index_m2m)
         m = m.reshape(-1, self.num_modes, self.hidden_dim)
         locs_propose_pos[0] = self.to_loc_propose_pos(m)
@@ -292,8 +292,9 @@ class QCNetDecoder(nn.Module):
         l2_norm = (torch.norm(one_future_step_refine[..., :self.output_dim] -
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
-        one_future_step_best = one_future_step_refine[torch.arange(one_future_step_refine.size(0)), best_mode][..., :self.input_dim]
-        data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best],dim=1)
+        one_future_step_best = one_future_step_refine[torch.arange(one_future_step_refine.size(0)), best_mode]
+
+        data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best.detach()],dim=1)
 
         return {
             'loc_propose_pos': loc_propose_pos,
