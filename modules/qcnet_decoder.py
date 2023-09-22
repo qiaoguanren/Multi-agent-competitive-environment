@@ -294,7 +294,10 @@ class QCNetDecoder(nn.Module):
         best_mode = l2_norm.argmin(dim=-1)
         one_future_step_best = one_future_step_refine[torch.arange(one_future_step_refine.size(0)), best_mode]
 
-        data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best.detach()],dim=1)
+        if random.randint(0,100) > 70:#teacher forcing
+            data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best.detach()],dim=1)
+        else:
+            data['agent']['position'] = torch.cat([data['agent']['position'],gt[..., :self.output_dim].repeat(1,1,2).detach()],dim=1)
 
         return {
             'loc_propose_pos': loc_propose_pos,
