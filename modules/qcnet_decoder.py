@@ -285,28 +285,28 @@ class QCNetDecoder(nn.Module):
         pi = self.to_pi(m).squeeze(-1)
 
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps+iter].unsqueeze(1)
-        one_future_step_propose = torch.cat([loc_propose_pos[..., :self.output_dim], scale_propose_pos[..., :self.output_dim]],dim=-1)
-        one_future_step_refine = torch.cat([loc_refine_pos[..., :self.output_dim], scale_refine_pos[..., :self.output_dim]],dim=-1)
+        one_future_step_propose = torch.cat([loc_propose_pos[..., :self.output_dim], scale_propose_pos[..., :self.output_dim]],dim=-1).detach()
+        one_future_step_refine = torch.cat([loc_refine_pos[..., :self.output_dim], scale_refine_pos[..., :self.output_dim]],dim=-1).detach()
         gt = torch.cat([data['agent']['target'][:, iter, :self.output_dim], data['agent']['target'][:, iter, -1:]], dim=-1).unsqueeze(1)
  
-        l2_norm = (torch.norm(one_future_step_refine[..., :self.output_dim] -
+        l2_norm = (torch.norm(one_future_step_propose[..., :self.output_dim] -
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
-        one_future_step_best = one_future_step_refine[torch.arange(one_future_step_refine.size(0)), best_mode]
+        one_future_step_best = one_future_step_refine[torch.arange(one_future_step_refine.size(0)), best_mode].detach()
 
-        if random.randint(0,100) > 70:#teacher forcing
-            data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best.detach()],dim=1)
+        if iter > 45:#teacher forcing
+            data['agent']['position'] = torch.cat([data['agent']['position'],one_future_step_best[..., :self.output_dim].detach()],dim=1)
         else:
-            data['agent']['position'] = torch.cat([data['agent']['position'],gt[..., :self.output_dim].repeat(1,1,2).detach()],dim=1)
+            data['agent']['position'] = torch.cat([data['agent']['position'],gt[..., :self.output_dim].detach()],dim=1)
 
         return {
             'loc_propose_pos': loc_propose_pos,
             'scale_propose_pos': scale_propose_pos,
-            'loc_propose_head': loc_propose_head,
-            'conc_propose_head': conc_propose_head,
+            #'loc_propose_head': loc_propose_head,
+            #'conc_propose_head': conc_propose_head,
             'loc_refine_pos': loc_refine_pos,
             'scale_refine_pos': scale_refine_pos,
-            'loc_refine_head': loc_refine_head,
-            'conc_refine_head': conc_refine_head,
+            #'loc_refine_head': loc_refine_head,
+            #'conc_refine_head': conc_refine_head,
             'pi': pi,
         }

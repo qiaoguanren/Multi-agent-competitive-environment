@@ -161,16 +161,18 @@ class QCNet(pl.LightningModule):
     def forward(self, data: HeteroData):
         pred = dict()
         temp = dict()
-        data['agent']['position'] = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim].repeat(1,1,2)
+        data['agent']['position'] = data['agent']['position'][:, :self.num_historical_steps, :self.input_dim]
         scene_enc = self.encoder(data,0)
         pred = self.decoder(data,scene_enc,0)
         for i in range(1, self.num_future_steps):
-            data['agent']['predict_mask'][:, :self.num_historical_steps+i] = False     
-            for j in range(data['agent']['valid_mask'].size(0)):
-                if not data['agent']['valid_mask'][j,self.num_historical_steps+i-1]:
-                    data['agent']['predict_mask'][j, self.num_historical_steps+i:] = False
+            #data['agent']['predict_mask'][:, :self.num_historical_steps+i] = False     
+            #for j in range(data['agent']['valid_mask'].size(0)):
+            #    if not data['agent']['valid_mask'][j,self.num_historical_steps+i-1]:
+            #        data['agent']['predict_mask'][j, self.num_historical_steps+i:] = False
             scene_enc = self.encoder(data,i)
             temp = self.decoder(data, scene_enc, i)
+            #pred['loc_propose_pos'] = torch.cat([pred['loc_propose_pos'],temp['loc_propose_pos']], dim=2).detach()
+            #pred['scale_propose_pos'] = torch.cat([pred['scale_propose_pos'],temp['scale_propose_pos']], dim=2).detach()
             pred['loc_refine_pos'] = torch.cat([pred['loc_refine_pos'],temp['loc_refine_pos']], dim=2).detach()
             pred['scale_refine_pos'] = torch.cat([pred['scale_refine_pos'],temp['scale_refine_pos']], dim=2).detach()
         return pred
@@ -196,7 +198,7 @@ class QCNet(pl.LightningModule):
             #traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
             #                          pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
             traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1).detach()
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
         l2_norm = (torch.norm(traj_refine[..., :self.output_dim] -
@@ -248,7 +250,7 @@ class QCNet(pl.LightningModule):
             #traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
             #                          pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
             traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
+                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1).detach()
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
         l2_norm = (torch.norm(traj_refine[..., :self.output_dim] -
