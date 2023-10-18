@@ -92,21 +92,23 @@ class QCNetAgentEncoder(nn.Module):
 
     def forward(self,
                 data: HeteroData,
-                iter: int,
                 map_enc: Mapping[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-        mask = data['agent']['valid_mask'][:, :self.num_historical_steps+iter].contiguous()
-        pos_a = data['agent']['position'][:, :self.num_historical_steps+iter, :self.input_dim].contiguous()
+        num_total_steps = 110
+        mask = data['agent']['valid_mask'][:, :num_total_steps].contiguous()
+        pos_a = data['agent']['position'][:, :num_total_steps, :self.input_dim].contiguous()
+        # print(pos_a.shape) #[N, 110, 2]
         motion_vector_a = torch.cat([pos_a.new_zeros(data['agent']['num_nodes'], 1, self.input_dim),
                                      pos_a[:, 1:] - pos_a[:, :-1]], dim=1)
-        head_a = data['agent']['heading'][:, :self.num_historical_steps+iter].contiguous()
+        # print(motion_vector_a.shape) # [N, 110, 2]
+        head_a = data['agent']['heading'][:, :num_total_steps].contiguous()
         head_vector_a = torch.stack([head_a.cos(), head_a.sin()], dim=-1)
         pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous()
         orient_pl = data['map_polygon']['orientation'].contiguous()
         if self.dataset == 'argoverse_v2':
-            vel = data['agent']['velocity'][:, :self.num_historical_steps+iter, :self.input_dim].contiguous()
+            vel = data['agent']['velocity'][:, :num_total_steps, :self.input_dim].contiguous()
             length = width = height = None
             categorical_embs = [
-                self.type_a_emb(data['agent']['type'].long()).repeat_interleave(repeats=self.num_historical_steps+iter,
+                self.type_a_emb(data['agent']['type'].long()).repeat_interleave(repeats=num_total_steps,
                                                                                 dim=0),
             ]
         else:
@@ -120,40 +122,51 @@ class QCNetAgentEncoder(nn.Module):
                  angle_between_2d_vectors(ctr_vector=head_vector_a, nbr_vector=vel[:, :, :2])], dim=-1)
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
-        x_a = self.x_a_emb(continuous_inputs=x_a.view(-1, x_a.size(-1)), categorical_embs=categorical_embs)
-        x_a = x_a.view(-1, self.num_historical_steps+iter, self.hidden_dim)
 
+        # Scene Element Embedding
+        x_a = self.x_a_emb(continuous_inputs=x_a.view(-1, x_a.size(-1)), categorical_embs=categorical_embs)
+        x_a = x_a.view(-1, num_total_steps, self.hidden_dim)
+        # print("x_a.shape", x_a.shape) # [N, 110, D], D=128
+
+        # Relative Spatial-Temporal Positional Embedding
         pos_t = pos_a.reshape(-1, self.input_dim)
         head_t = head_a.reshape(-1)
         head_vector_t = head_vector_a.reshape(-1, 2)
-        mask_t = mask.unsqueeze(2) & mask.unsqueeze(1)
-        edge_index_t = dense_to_sparse(mask_t)[0]
-        edge_index_t = edge_index_t[:, edge_index_t[1] > edge_index_t[0]]
-        edge_index_t = edge_index_t[:, edge_index_t[1] - edge_index_t[0] <= self.time_span]
+        mask_t = mask.unsqueeze(2) & mask.unsqueeze(1) # shape [N, 110, 110], (i, j) is True only when both i and j are true in mask (valid for both time step i and j)
+        edge_index_t = dense_to_sparse(mask_t)[0] # sparse indexes of mask_t, of shape [2, N1], corresponds to the indexes of true values in mask_t
+        edge_index_t = edge_index_t[:, edge_index_t[1] > edge_index_t[0]] # only keep the time steps that j is larger than i (keeps half to avoid duplicated index)
+        edge_index_t = edge_index_t[:, edge_index_t[1] - edge_index_t[0] <= self.time_span] # ensures that edges that j - i < historical time steps
         rel_pos_t = pos_t[edge_index_t[0]] - pos_t[edge_index_t[1]]
         rel_head_t = wrap_angle(head_t[edge_index_t[0]] - head_t[edge_index_t[1]])
+        # print(edge_index_t.shape, rel_pos_t.shape, rel_head_t.shape) # [2, X1], [X1, 2], [X1]
+        # print(pos_t.shape) #  [N*110, 2]
+        # print(pos_a.shape) #  [N, 110, 2]
+        # print(rel_pos_t.shape) # [X1, 2]
+        # print(rel_head_t.shape) # [X1]
         r_t = torch.stack(
             [torch.norm(rel_pos_t[:, :2], p=2, dim=-1),
              angle_between_2d_vectors(ctr_vector=head_vector_t[edge_index_t[1]], nbr_vector=rel_pos_t[:, :2]),
              rel_head_t,
              edge_index_t[0] - edge_index_t[1]], dim=-1)
+        # print(r_t.shape) # [X1, 4]
         r_t = self.r_t_emb(continuous_inputs=r_t, categorical_embs=None)
+        # print(r_t.shape) # [X1, 128]
 
         pos_s = pos_a.transpose(0, 1).reshape(-1, self.input_dim)
         head_s = head_a.transpose(0, 1).reshape(-1)
         head_vector_s = head_vector_a.transpose(0, 1).reshape(-1, 2)
         mask_s = mask.transpose(0, 1).reshape(-1)
-        pos_pl = pos_pl.repeat(self.num_historical_steps+iter, 1)
-        orient_pl = orient_pl.repeat(self.num_historical_steps+iter)
+        pos_pl = pos_pl.repeat(num_total_steps, 1)
+        orient_pl = orient_pl.repeat(num_total_steps)
         if isinstance(data, Batch):
             batch_s = torch.cat([data['agent']['batch'] + data.num_graphs * t
-                                 for t in range(self.num_historical_steps+iter)], dim=0)
+                                 for t in range(num_total_steps)], dim=0)
             batch_pl = torch.cat([data['map_polygon']['batch'] + data.num_graphs * t
-                                  for t in range(self.num_historical_steps+iter)], dim=0)
+                                  for t in range(num_total_steps)], dim=0)
         else:
-            batch_s = torch.arange(self.num_historical_steps+iter,
+            batch_s = torch.arange(num_total_steps,
                                    device=pos_a.device).repeat_interleave(data['agent']['num_nodes'])
-            batch_pl = torch.arange(self.num_historical_steps+iter,
+            batch_pl = torch.arange(num_total_steps,
                                     device=pos_pl.device).repeat_interleave(data['map_polygon']['num_nodes'])
         edge_index_pl2a = radius(x=pos_s[:, :2], y=pos_pl[:, :2], r=self.pl2a_radius, batch_x=batch_s, batch_y=batch_pl,
                                  max_num_neighbors=300)
@@ -168,6 +181,9 @@ class QCNetAgentEncoder(nn.Module):
         edge_index_a2a = radius_graph(x=pos_s[:, :2], r=self.a2a_radius, batch=batch_s, loop=False,
                                       max_num_neighbors=300)
         edge_index_a2a = subgraph(subset=mask_s, edge_index=edge_index_a2a)[0]
+        time_index_a2a = edge_index_a2a.clone() % num_total_steps
+        edge_index_a2a = edge_index_a2a[:, time_index_a2a[1] > time_index_a2a[0]] # select only time steps that j is larger than i
+
         rel_pos_a2a = pos_s[edge_index_a2a[0]] - pos_s[edge_index_a2a[1]]
         rel_head_a2a = wrap_angle(head_s[edge_index_a2a[0]] - head_s[edge_index_a2a[1]])
         r_a2a = torch.stack(
@@ -175,15 +191,21 @@ class QCNetAgentEncoder(nn.Module):
              angle_between_2d_vectors(ctr_vector=head_vector_s[edge_index_a2a[1]], nbr_vector=rel_pos_a2a[:, :2]),
              rel_head_a2a], dim=-1)
         r_a2a = self.r_a2a_emb(continuous_inputs=r_a2a, categorical_embs=None)
+        # print(x_a.shape, r_t.shape, r_pl2a.shape, r_a2a.shape, edge_index_t.shape, edge_index_pl2a.shape, edge_index_a2a.shape)
+        # [N, 110, D], [X1, 128], [X2, 128], [X3, 128], [2, X1], [2, X2], [2, X3]
+        # x_a: position embedding, [N, 110, D]
+        # r_t: embedding of agent relative positions, [X1, 128]
+        # r_pl2a: embedding of map_polygon with agent, [X2, 128]
+        # r_a2a: embedding of positions between agents, [X3, 128]
 
         for i in range(self.num_layers):
             x_a = x_a.reshape(-1, self.hidden_dim)
             x_a = self.t_attn_layers[i](x_a, r_t, edge_index_t)
-            x_a = x_a.reshape(-1, self.num_historical_steps+iter,
+            x_a = x_a.reshape(-1, num_total_steps,
                               self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
             x_a = self.pl2a_attn_layers[i]((map_enc['x_pl'].transpose(0, 1).reshape(-1, self.hidden_dim), x_a), r_pl2a,
                                            edge_index_pl2a)
             x_a = self.a2a_attn_layers[i](x_a, r_a2a, edge_index_a2a)
-            x_a = x_a.reshape(self.num_historical_steps+iter, -1, self.hidden_dim).transpose(0, 1)
-
-        return {'x_a': x_a}
+            x_a = x_a.reshape(num_total_steps, -1, self.hidden_dim).transpose(0, 1)
+        
+        return {'x_a': x_a, 'max_edge_num': max([edge_index_pl2a.shape[1], edge_index_a2a.shape[1], edge_index_t.shape[1]])}
