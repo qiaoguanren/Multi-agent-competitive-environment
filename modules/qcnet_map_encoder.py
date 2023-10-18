@@ -92,7 +92,7 @@ class QCNetMapEncoder(nn.Module):
         )
         self.apply(weight_init)
 
-    def forward(self, data: HeteroData, iter: int) -> Dict[str, torch.Tensor]:
+    def forward(self, data: HeteroData) -> Dict[str, torch.Tensor]:
         pos_pt = data['map_point']['position'][:, :self.input_dim].contiguous()
         orient_pt = data['map_point']['orientation'].contiguous()
         pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous()
@@ -116,6 +116,9 @@ class QCNetMapEncoder(nn.Module):
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
         x_pt = self.x_pt_emb(continuous_inputs=x_pt, categorical_embs=x_pt_categorical_embs)
         x_pl = self.x_pl_emb(continuous_inputs=x_pl, categorical_embs=x_pl_categorical_embs)
+        # print("in map encoder")
+        # print(x_pt.shape, x_pl.shape)
+        # [N1, D], [N2, D], D=128
 
         edge_index_pt2pl = data['map_point', 'to', 'map_polygon']['edge_index']
         rel_pos_pt2pl = pos_pt[edge_index_pt2pl[0]] - pos_pl[edge_index_pt2pl[1]]
@@ -164,10 +167,14 @@ class QCNetMapEncoder(nn.Module):
             raise ValueError('{} is not a valid dimension'.format(self.input_dim))
         r_pl2pl = self.r_pl2pl_emb(continuous_inputs=r_pl2pl, categorical_embs=[self.type_pl2pl_emb(type_pl2pl.long())])
 
+        # print(x_pt.shape, x_pl.shape, r_pt2pl.shape, r_pl2pl.shape, edge_index_pt2pl.shape, edge_index_pl2pl.shape)
+        # [N1, D], [N2, D], [N1, D], [N3, D], [2, N1], [2, N3]
         for i in range(self.num_layers):
             x_pl = self.pt2pl_layers[i]((x_pt, x_pl), r_pt2pl, edge_index_pt2pl)
             x_pl = self.pl2pl_layers[i](x_pl, r_pl2pl, edge_index_pl2pl)
-        x_pl = x_pl.repeat_interleave(repeats=self.num_historical_steps+iter,
-                                      dim=0).reshape(-1, self.num_historical_steps+iter, self.hidden_dim)
-
-        return {'x_pt': x_pt, 'x_pl': x_pl}
+        num_total_steps = 110
+        x_pl = x_pl.repeat_interleave(repeats=num_total_steps,
+                                      dim=0).reshape(-1, num_total_steps, self.hidden_dim)
+        # print(x_pt.shape, x_pl.shape)
+        # [N1, D], [N2, 50, D]
+        return {'x_pt': x_pt, 'x_pl': x_pl, "edge_index_pt2pl": edge_index_pt2pl, "edge_index_pl2pl": edge_index_pl2pl}

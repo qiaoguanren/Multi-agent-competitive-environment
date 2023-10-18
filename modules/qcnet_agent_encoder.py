@@ -96,10 +96,10 @@ class QCNetAgentEncoder(nn.Module):
         num_total_steps = 110
         mask = data['agent']['valid_mask'][:, :num_total_steps].contiguous()
         pos_a = data['agent']['position'][:, :num_total_steps, :self.input_dim].contiguous()
-        # print(pos_a.shape) #[N, 110, 2]
+        # print(pos_a.shape) #[N, 50, 2]
         motion_vector_a = torch.cat([pos_a.new_zeros(data['agent']['num_nodes'], 1, self.input_dim),
                                      pos_a[:, 1:] - pos_a[:, :-1]], dim=1)
-        # print(motion_vector_a.shape) # [N, 110, 2]
+        # print(motion_vector_a.shape) # [N, 50, 2]
         head_a = data['agent']['heading'][:, :num_total_steps].contiguous()
         head_vector_a = torch.stack([head_a.cos(), head_a.sin()], dim=-1)
         pos_pl = data['map_polygon']['position'][:, :self.input_dim].contiguous()
@@ -113,7 +113,6 @@ class QCNetAgentEncoder(nn.Module):
             ]
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
-
         if self.dataset == 'argoverse_v2':
             x_a = torch.stack(
                 [torch.norm(motion_vector_a[:, :, :2], p=2, dim=-1),
@@ -126,31 +125,27 @@ class QCNetAgentEncoder(nn.Module):
         # Scene Element Embedding
         x_a = self.x_a_emb(continuous_inputs=x_a.view(-1, x_a.size(-1)), categorical_embs=categorical_embs)
         x_a = x_a.view(-1, num_total_steps, self.hidden_dim)
-        # print("x_a.shape", x_a.shape) # [N, 110, D], D=128
+        # print("x_a.shape", x_a.shape) # [N, 50, D], D=128
 
         # Relative Spatial-Temporal Positional Embedding
         pos_t = pos_a.reshape(-1, self.input_dim)
         head_t = head_a.reshape(-1)
         head_vector_t = head_vector_a.reshape(-1, 2)
-        mask_t = mask.unsqueeze(2) & mask.unsqueeze(1) # shape [N, 110, 110], (i, j) is True only when both i and j are true in mask (valid for both time step i and j)
+        mask_t = mask.unsqueeze(2) & mask.unsqueeze(1) # shape [N, 50, 50], (i, j) is True only when both i and j are true in mask (valid for both time step i and j)
         edge_index_t = dense_to_sparse(mask_t)[0] # sparse indexes of mask_t, of shape [2, N1], corresponds to the indexes of true values in mask_t
         edge_index_t = edge_index_t[:, edge_index_t[1] > edge_index_t[0]] # only keep the time steps that j is larger than i (keeps half to avoid duplicated index)
         edge_index_t = edge_index_t[:, edge_index_t[1] - edge_index_t[0] <= self.time_span] # ensures that edges that j - i < historical time steps
+        # edge_index_t = edge_index_t[:, temporal_mask[edge_index_t[0], edge_index_t[1]]]
+        # print(edge_index_t)
         rel_pos_t = pos_t[edge_index_t[0]] - pos_t[edge_index_t[1]]
         rel_head_t = wrap_angle(head_t[edge_index_t[0]] - head_t[edge_index_t[1]])
-        # print(edge_index_t.shape, rel_pos_t.shape, rel_head_t.shape) # [2, X1], [X1, 2], [X1]
-        # print(pos_t.shape) #  [N*110, 2]
-        # print(pos_a.shape) #  [N, 110, 2]
-        # print(rel_pos_t.shape) # [X1, 2]
-        # print(rel_head_t.shape) # [X1]
+
         r_t = torch.stack(
             [torch.norm(rel_pos_t[:, :2], p=2, dim=-1),
              angle_between_2d_vectors(ctr_vector=head_vector_t[edge_index_t[1]], nbr_vector=rel_pos_t[:, :2]),
              rel_head_t,
              edge_index_t[0] - edge_index_t[1]], dim=-1)
-        # print(r_t.shape) # [X1, 4]
         r_t = self.r_t_emb(continuous_inputs=r_t, categorical_embs=None)
-        # print(r_t.shape) # [X1, 128]
 
         pos_s = pos_a.transpose(0, 1).reshape(-1, self.input_dim)
         head_s = head_a.transpose(0, 1).reshape(-1)
@@ -191,13 +186,7 @@ class QCNetAgentEncoder(nn.Module):
              angle_between_2d_vectors(ctr_vector=head_vector_s[edge_index_a2a[1]], nbr_vector=rel_pos_a2a[:, :2]),
              rel_head_a2a], dim=-1)
         r_a2a = self.r_a2a_emb(continuous_inputs=r_a2a, categorical_embs=None)
-        # print(x_a.shape, r_t.shape, r_pl2a.shape, r_a2a.shape, edge_index_t.shape, edge_index_pl2a.shape, edge_index_a2a.shape)
-        # [N, 110, D], [X1, 128], [X2, 128], [X3, 128], [2, X1], [2, X2], [2, X3]
-        # x_a: position embedding, [N, 110, D]
-        # r_t: embedding of agent relative positions, [X1, 128]
-        # r_pl2a: embedding of map_polygon with agent, [X2, 128]
-        # r_a2a: embedding of positions between agents, [X3, 128]
-
+        
         for i in range(self.num_layers):
             x_a = x_a.reshape(-1, self.hidden_dim)
             x_a = self.t_attn_layers[i](x_a, r_t, edge_index_t)
@@ -207,5 +196,5 @@ class QCNetAgentEncoder(nn.Module):
                                            edge_index_pl2a)
             x_a = self.a2a_attn_layers[i](x_a, r_a2a, edge_index_a2a)
             x_a = x_a.reshape(num_total_steps, -1, self.hidden_dim).transpose(0, 1)
-        
-        return {'x_a': x_a, 'max_edge_num': max([edge_index_pl2a.shape[1], edge_index_a2a.shape[1], edge_index_t.shape[1]])}
+
+        return {'x_a': x_a}

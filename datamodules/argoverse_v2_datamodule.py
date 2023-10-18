@@ -37,9 +37,12 @@ class ArgoverseV2DataModule(pl.LightningDataModule):
                  train_processed_dir: Optional[str] = None,
                  val_processed_dir: Optional[str] = None,
                  test_processed_dir: Optional[str] = None,
-                 train_transform: Optional[Callable] = TargetBuilder(50, 60),
-                 val_transform: Optional[Callable] = TargetBuilder(50, 60),
+                 train_transform: Optional[Callable] = None,
+                 val_transform: Optional[Callable] = None,
                  test_transform: Optional[Callable] = None,
+                 num_historical_steps: Optional[int] = None, 
+                 num_future_steps: Optional[int] = None, 
+                 teacher_forcing: Optional[bool] = None,
                  **kwargs) -> None:
         super(ArgoverseV2DataModule, self).__init__()
         self.root = root
@@ -56,8 +59,8 @@ class ArgoverseV2DataModule(pl.LightningDataModule):
         self.train_processed_dir = train_processed_dir
         self.val_processed_dir = val_processed_dir
         self.test_processed_dir = test_processed_dir
-        self.train_transform = train_transform
-        self.val_transform = val_transform
+        self.train_transform = TargetBuilder(num_historical_steps, num_future_steps, teacher_forcing)
+        self.val_transform = TargetBuilder(num_historical_steps, num_future_steps, teacher_forcing)
         self.test_transform = test_transform
 
     def prepare_data(self) -> None:
@@ -76,14 +79,14 @@ class ArgoverseV2DataModule(pl.LightningDataModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.train_batch_size, shuffle=self.shuffle,
                           num_workers=self.num_workers, pin_memory=self.pin_memory,
-                          persistent_workers=self.persistent_workers, drop_last=True)
+                          persistent_workers=self.persistent_workers)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.val_batch_size, shuffle=False,
                           num_workers=self.num_workers, pin_memory=self.pin_memory,
-                          persistent_workers=self.persistent_workers, drop_last=True)
+                          persistent_workers=self.persistent_workers)
 
     def test_dataloader(self):
         return DataLoader(self.test_dataset, batch_size=self.test_batch_size, shuffle=False,
                           num_workers=self.num_workers, pin_memory=self.pin_memory,
-                          persistent_workers=self.persistent_workers, drop_last=True)
+                          persistent_workers=self.persistent_workers)

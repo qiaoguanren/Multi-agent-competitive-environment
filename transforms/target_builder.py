@@ -22,11 +22,28 @@ class TargetBuilder(BaseTransform):
 
     def __init__(self,
                  num_historical_steps: int,
-                 num_future_steps: int) -> None:
+                 num_future_steps: int,
+                 teacher_forcing: bool) -> None:
         self.num_historical_steps = num_historical_steps
         self.num_future_steps = num_future_steps
+        self.teacher_forcing = teacher_forcing
+        self.num_total_steps = 110
 
     def __call__(self, data: HeteroData) -> HeteroData:
+        if self.teacher_forcing:
+            origin = data['agent']['position'][:, self.num_historical_steps-1:-1] # [N, num_steps-num_init_steps-target_step_gap, 2]
+            theta = data['agent']['heading'][:, self.num_historical_steps-1:-1] # [N, num_steps-num_init_steps-target_step_gap, 2]
+            cos, sin = theta.cos(), theta.sin()
+
+            rot_mat = torch.zeros([data['agent']['num_nodes'], self.num_total_steps-self.num_historical_steps , 2, 2])
+            rot_mat[:, :, 0, 0] = cos
+            rot_mat[:, :, 0, 1] = -sin
+            rot_mat[:, :, 1, 0] = sin
+            rot_mat[:, :, 1, 1] = cos
+            data['agent']['target'] = torch.matmul((data['agent']['position'][:, (self.num_historical_steps):, :2] -
+                                                        origin[:, :, :2]).unsqueeze(-2), rot_mat).squeeze(-2)
+            return data
+        
         origin = data['agent']['position'][:, self.num_historical_steps - 1]
         theta = data['agent']['heading'][:, self.num_historical_steps - 1]
         cos, sin = theta.cos(), theta.sin()

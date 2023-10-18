@@ -31,12 +31,8 @@ from metrics import minADE
 from metrics import minAHE
 from metrics import minFDE
 from metrics import minFHE
-from modules.decoder import QCNetDecoder
+from modules import QCNetDecoder
 from modules import QCNetEncoder
-
-import warnings
- 
-warnings.filterwarnings("ignore")
 
 try:
     from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
@@ -75,6 +71,8 @@ class QCNet(pl.LightningModule):
                  T_max: int,
                  submission_dir: str,
                  submission_file_name: str,
+                 agent_limit: Optional[int] = 20,
+                 evaluate_type: Optional[str] = 'teacher_forcing', 
                  **kwargs) -> None:
         super(QCNet, self).__init__()
         self.save_hyperparameters()
@@ -106,6 +104,7 @@ class QCNet(pl.LightningModule):
         self.T_max = T_max
         self.submission_dir = submission_dir
         self.submission_file_name = submission_file_name
+        self.agent_limit = agent_limit
 
         self.encoder = QCNetEncoder(
             dataset=dataset,
@@ -156,7 +155,6 @@ class QCNet(pl.LightningModule):
         self.MR = MR(max_guesses=6)
 
         self.test_predictions = dict()
-        self.val_predictions = dict()
 
     def forward(self, data: HeteroData):
         scene_enc = self.encoder(data)
@@ -168,6 +166,43 @@ class QCNet(pl.LightningModule):
                       batch_idx):
         if isinstance(data, Batch):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
+
+        min_valid_steps = 40
+        original_num_nodes = data['agent']['num_nodes']
+        agent_limit = self.agent_limit
+
+        if data['agent']['num_nodes'] > agent_limit:
+            # return None
+            gt_dis_norm = (data['agent']['position'][:, -1, :2] - data['agent']['position'][:, 0, :2]).norm(dim=-1) # N
+            valid_mask = (data['agent']['predict_mask'].sum(-1) >= min_valid_steps) & (data['agent']['predict_mask'][:, -1] != 0)
+            # valid_mask = valid_mask & (gt_dis_norm > min_displacement)
+            data['agent']['num_nodes'] = valid_mask.sum()
+            data['agent']['valid_mask'] = data['agent']['valid_mask'][valid_mask]
+            data['agent']['predict_mask'] = data['agent']['predict_mask'][valid_mask]
+            data['agent']['type'] = data['agent']['type'][valid_mask]
+            data['agent']['category'] = data['agent']['category'][valid_mask]
+            data['agent']['position'] = data['agent']['position'][valid_mask]
+            data['agent']['heading'] = data['agent']['heading'][valid_mask]
+            data['agent']['velocity'] = data['agent']['velocity'][valid_mask]
+            data['agent']['target'] = data['agent']['target'][valid_mask]
+            data['agent']['batch'] = data['agent']['batch'][valid_mask]
+            data['agent']['ptr'][1] = data['agent']['num_nodes']
+            if data['agent']['num_nodes'] > agent_limit:
+                data['agent']['num_nodes'] = agent_limit
+                data['agent']['valid_mask'] = data['agent']['valid_mask'][:agent_limit]
+                data['agent']['predict_mask'] = data['agent']['predict_mask'][:agent_limit]
+                data['agent']['type'] = data['agent']['type'][:agent_limit]
+                data['agent']['category'] = data['agent']['category'][:agent_limit]
+                data['agent']['position'] = data['agent']['position'][:agent_limit]
+                data['agent']['heading'] = data['agent']['heading'][:agent_limit]
+                data['agent']['velocity'] = data['agent']['velocity'][:agent_limit]
+                data['agent']['target'] = data['agent']['target'][:agent_limit]
+                data['agent']['batch'] = data['agent']['batch'][:agent_limit]
+                data['agent']['ptr'][1] = data['agent']['num_nodes']
+
+            # print(f"Reduced data due to agent number exceeded limit: {original_num_nodes} > {agent_limit}. After reduction, agent_num = ", data['agent']['num_nodes'].item())
+        
+        
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
         pred = self(data)
@@ -192,7 +227,6 @@ class QCNet(pl.LightningModule):
         best_mode = l2_norm.argmin(dim=-1)
         traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
         traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-
         reg_loss_propose = self.reg_loss(traj_propose_best,
                                          gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -201,15 +235,15 @@ class QCNet(pl.LightningModule):
                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
         reg_loss_refine = reg_loss_refine.mean()
-        cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
-                                 target=gt[:, -1:, :self.output_dim + self.output_head],
-                                 prob=pi,
-                                 mask=reg_mask[:, -1:]) * cls_mask
-        cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
+        # cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
+        #                          target=gt[:, -1:, :self.output_dim + self.output_head],
+        #                          prob=pi,
+        #                          mask=reg_mask[:, -1:]) * cls_mask
+        # cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
         self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        loss = reg_loss_propose + reg_loss_refine + cls_loss
+        # self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+        loss = reg_loss_propose + reg_loss_refine
         return loss
 
     def validation_step(self,
@@ -217,6 +251,42 @@ class QCNet(pl.LightningModule):
                         batch_idx):
         if isinstance(data, Batch):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
+        
+        min_valid_steps = 20
+        original_num_nodes = data['agent']['num_nodes']
+        agent_limit = self.agent_limit
+
+        if data['agent']['num_nodes'] > agent_limit:
+            # return None
+            gt_dis_norm = (data['agent']['position'][:, -1, :2] - data['agent']['position'][:, 0, :2]).norm(dim=-1) # N
+            valid_mask = (data['agent']['predict_mask'].sum(-1) >= min_valid_steps) & (data['agent']['predict_mask'][:, -1] != 0)
+            # valid_mask = valid_mask & (gt_dis_norm > min_displacement)
+            data['agent']['num_nodes'] = valid_mask.sum()
+            data['agent']['valid_mask'] = data['agent']['valid_mask'][valid_mask]
+            data['agent']['predict_mask'] = data['agent']['predict_mask'][valid_mask]
+            data['agent']['type'] = data['agent']['type'][valid_mask]
+            data['agent']['category'] = data['agent']['category'][valid_mask]
+            data['agent']['position'] = data['agent']['position'][valid_mask]
+            data['agent']['heading'] = data['agent']['heading'][valid_mask]
+            data['agent']['velocity'] = data['agent']['velocity'][valid_mask]
+            data['agent']['target'] = data['agent']['target'][valid_mask]
+            data['agent']['batch'] = data['agent']['batch'][valid_mask]
+            data['agent']['ptr'][1] = data['agent']['num_nodes']
+            if data['agent']['num_nodes'] > agent_limit:
+                data['agent']['num_nodes'] = agent_limit
+                data['agent']['valid_mask'] = data['agent']['valid_mask'][:agent_limit]
+                data['agent']['predict_mask'] = data['agent']['predict_mask'][:agent_limit]
+                data['agent']['type'] = data['agent']['type'][:agent_limit]
+                data['agent']['category'] = data['agent']['category'][:agent_limit]
+                data['agent']['position'] = data['agent']['position'][:agent_limit]
+                data['agent']['heading'] = data['agent']['heading'][:agent_limit]
+                data['agent']['velocity'] = data['agent']['velocity'][:agent_limit]
+                data['agent']['target'] = data['agent']['target'][:agent_limit]
+                data['agent']['batch'] = data['agent']['batch'][:agent_limit]
+                data['agent']['ptr'][1] = data['agent']['num_nodes']
+
+            # print(f"Reduced data due to agent number exceeded limit: {original_num_nodes} > {agent_limit}. After reduction, agent_num = ", data['agent']['num_nodes'].item())
+        
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
         pred = self(data)
@@ -239,14 +309,8 @@ class QCNet(pl.LightningModule):
         l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
-        
         traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
         traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-
-        #torch.save(gt, f"./saved_tensors/gt_{batch_idx}.pt")
-        #torch.save(traj_propose_best, f"./saved_tensors/traj_propose_best_{batch_idx}.pt")
-        #torch.save(traj_refine_best, f"./saved_tensors/traj_refine_best_{batch_idx}.pt")
-        
         reg_loss_propose = self.reg_loss(traj_propose_best,
                                          gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
@@ -255,24 +319,23 @@ class QCNet(pl.LightningModule):
                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
         reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
         reg_loss_refine = reg_loss_refine.mean()
-        cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
-                                 target=gt[:, -1:, :self.output_dim + self.output_head],
-                                 prob=pi,
-                                 mask=reg_mask[:, -1:]) * cls_mask
-        cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
+        # cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
+        #                          target=gt[:, -1:, :self.output_dim + self.output_head],
+        #                          prob=pi,
+        #                          mask=reg_mask[:, -1:]) * cls_mask
+        # cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
         self.log('val_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
                  sync_dist=True)
         self.log('val_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
                  sync_dist=True)
-        self.log('val_cls_loss', cls_loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-     
+        # self.log('val_cls_loss', cls_loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
+
         if self.dataset == 'argoverse_v2':
             eval_mask = data['agent']['category'] == 3
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
         valid_mask_eval = reg_mask[eval_mask]
         traj_eval = traj_refine[eval_mask, :, :, :self.output_dim + self.output_head]
-
         if not self.output_head:
             traj_2d_with_start_pos_eval = torch.cat([traj_eval.new_zeros((traj_eval.size(0), self.num_modes, 1, 2)),
                                                      traj_eval[..., :2]], dim=-2)
@@ -281,37 +344,7 @@ class QCNet(pl.LightningModule):
             traj_eval = torch.cat([traj_eval, head_eval.unsqueeze(-1)], dim=-1)
         pi_eval = F.softmax(pi[eval_mask], dim=-1)
         gt_eval = gt[eval_mask]
-        
-        origin_eval = data['agent']['position'][eval_mask, self.num_historical_steps - 1]
-        theta_eval = data['agent']['heading'][eval_mask, self.num_historical_steps - 1]
-        origin_traj = data['agent']['position'][eval_mask, :self.num_historical_steps, :self.output_dim]
-        cos, sin = theta_eval.cos(), theta_eval.sin()
-        rot_mat = torch.zeros(eval_mask.sum(), 2, 2, device=self.device)
-        rot_mat[:, 0, 0] = cos
-        rot_mat[:, 0, 1] = sin
-        rot_mat[:, 1, 0] = -sin
-        rot_mat[:, 1, 1] = cos
-        traj_eval_viz = torch.matmul(traj_refine[eval_mask, :, :, :2],
-                                 rot_mat.unsqueeze(1)) + origin_eval[:, :2].reshape(-1, 1, 1, 2)
-        origin_traj = origin_traj.unsqueeze(1).repeat(1,6,1,1)
-        traj_eval_viz = torch.cat([origin_traj,traj_eval_viz],dim=2)
-        if self.dataset == 'argoverse_v2':
-            eval_id = list(compress(list(chain(*data['agent']['id'])), eval_mask))
-            if isinstance(data, Batch):
-                for i in range(data.num_graphs):
-                    self.val_predictions[data['scenario_id'][i]] = (pi_eval[i].cpu().numpy(), {eval_id[i]: traj_eval_viz[i].cpu().numpy()})
-            else:
-                self.val_predictions[data['scenario_id']] = (pi_eval[0].cpu().numpy(), {eval_id[0]: traj_eval_viz[0].cpu().numpy()})
-        else:
-            raise ValueError('{} is not a valid dataset'.format(self.dataset))
-        if self.dataset == 'argoverse_v2':
-            self.submission_dir='/home/guanren/QCNet/submission'
-            self.submission_file_name='submission_batch8_val_'+str(batch_idx)
-            ChallengeSubmission(self.val_predictions).to_parquet(
-                Path(self.submission_dir) / f'{self.submission_file_name}.parquet')
-                #Path(self.submission_dir) / '{data[scenario_id]}.parquet'.format(data=data))
-        else:
-            raise ValueError('{} is not a valid dataset'.format(self.dataset))
+
         self.Brier.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
                           valid_mask=valid_mask_eval)
         self.minADE.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
@@ -328,14 +361,6 @@ class QCNet(pl.LightningModule):
         self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_minFHE', self.minFHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_MR', self.MR, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        print('self.Brier')
-        print(self.Brier.compute())
-        print('self.minADE')
-        print(self.minADE.compute())
-        print('self.minFDE')
-        print(self.minFDE.compute())
-        print('self.MR')
-        print(self.MR.compute())
 
     def test_step(self,
                   data,
@@ -379,12 +404,11 @@ class QCNet(pl.LightningModule):
                 self.test_predictions[data['scenario_id']] = (pi_eval[0], {eval_id[0]: traj_eval[0]})
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
+
+    def on_test_end(self):
         if self.dataset == 'argoverse_v2':
-            self.submission_dir='/home/guanren/QCNet'
-            self.submission_file_name='submission_batch8'
             ChallengeSubmission(self.test_predictions).to_parquet(
                 Path(self.submission_dir) / f'{self.submission_file_name}.parquet')
-                #Path(self.submission_dir) / '{data[scenario_id]}.parquet'.format(data=data))
         else:
             raise ValueError('{} is not a valid dataset'.format(self.dataset))
 
@@ -452,6 +476,6 @@ class QCNet(pl.LightningModule):
         parser.add_argument('--lr', type=float, default=5e-4)
         parser.add_argument('--weight_decay', type=float, default=1e-4)
         parser.add_argument('--T_max', type=int, default=64)
-        parser.add_argument('--submission_dir', type=str, default='../')
+        parser.add_argument('--submission_dir', type=str, default='./')
         parser.add_argument('--submission_file_name', type=str, default='submission')
         return parent_parser

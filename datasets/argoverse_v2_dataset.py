@@ -31,10 +31,6 @@ from tqdm import tqdm
 from utils import safe_list_index
 from utils import side_to_directed_lineseg
 
-import warnings
- 
-warnings.filterwarnings("ignore")
-
 try:
     from av2.geometry.interpolate import compute_midpoint_line
     from av2.map.map_api import ArgoverseStaticMap
@@ -135,11 +131,13 @@ class ArgoverseV2Dataset(Dataset):
         self.predict_unseen_agents = predict_unseen_agents
         self.vector_repr = vector_repr
         self._url = f'https://s3.amazonaws.com/argoverse/datasets/av2/tars/motion-forecasting/{split}.tar'
-        self._num_samples = {
-            'train': 199908,
-            'val': 24988,
-            'test': 24984,
-        }[split]
+        # self._num_samples = {
+        #     'train': 199908,
+        #     'val': 24988,
+        #     'test': 24984,
+        # }[split]
+        self._num_samples = len(self._raw_file_names)
+
         self._agent_types = ['vehicle', 'pedestrian', 'motorcyclist', 'cyclist', 'bus', 'static', 'background',
                              'construction', 'riderless_bicycle', 'unknown']
         self._agent_categories = ['TRACK_FRAGMENT', 'UNSCORED_TRACK', 'SCORED_TRACK', 'FOCAL_TRACK']
@@ -198,8 +196,7 @@ class ArgoverseV2Dataset(Dataset):
             data['scenario_id'] = self.get_scenario_id(df)
             data['city'] = self.get_city(df)
             data['agent'] = self.get_agent_features(df)
-            temp = self.get_map_features(map_api, centerlines)
-            data.update(temp)
+            data.update(self.get_map_features(map_api, centerlines))
             with open(os.path.join(self.processed_dir, f'{raw_file_name}.pkl'), 'wb') as handle:
                 pickle.dump(data, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
@@ -233,54 +230,32 @@ class ArgoverseV2Dataset(Dataset):
         heading = torch.zeros(num_agents, self.num_steps, dtype=torch.float)
         velocity = torch.zeros(num_agents, self.num_steps, self.dim, dtype=torch.float)
 
-        print('num_agents:'+str(num_agents)+'\n')
-        del_num = 0
         for track_id, track_df in df.groupby('track_id'):
             agent_idx = agent_ids.index(track_id)
             agent_steps = track_df['timestep'].values
-            flag = 0
-            
-            valid_mask[agent_idx-del_num, agent_steps] = True
-            current_valid_mask[agent_idx-del_num] = valid_mask[agent_idx-del_num, self.num_historical_steps - 1]
-            predict_mask[agent_idx-del_num, agent_steps] = True
-            if self.vector_repr:  # a time step t is valid only when both t and t-1 are valid
-                valid_mask[agent_idx-del_num, 1: self.num_historical_steps] = (
-                        valid_mask[agent_idx-del_num, :self.num_historical_steps - 1] &
-                        valid_mask[agent_idx-del_num, 1: self.num_historical_steps])
-                valid_mask[agent_idx-del_num, 0] = False
-            predict_mask[agent_idx-del_num, :self.num_historical_steps] = False
-            if not current_valid_mask[agent_idx-del_num]:
-                predict_mask[agent_idx-del_num, self.num_historical_steps:] = False
 
-            for j in range(1,self.num_historical_steps):
-                if not (valid_mask[agent_idx-del_num][j]):
-                    flag=1
-                    break
-            if flag:
-                valid_mask = valid_mask[torch.arange(valid_mask.size(0))!=(agent_idx-del_num)]
-                predict_mask = predict_mask[torch.arange(predict_mask.size(0))!=(agent_idx-del_num)]
-                current_valid_mask = current_valid_mask[torch.arange(current_valid_mask.size(0))!=(agent_idx-del_num)]
-                position = position[torch.arange(position.size(0))!=(agent_idx-del_num)]
-                heading = heading[torch.arange(heading.size(0))!=(agent_idx-del_num)]
-                velocity = velocity[torch.arange(velocity.size(0))!=(agent_idx-del_num)]
-                agent_type = agent_type[torch.arange(agent_type.size(0))!=(agent_idx-del_num)]
-                del agent_id[agent_idx-del_num]
-                agent_category = agent_category[torch.arange(agent_category.size(0))!=(agent_idx-del_num)]
-                num_agents-=1
-                del_num+=1
-            else:
-                agent_id[agent_idx-del_num] = track_id
-                agent_type[agent_idx-del_num] = self._agent_types.index(track_df['object_type'].values[0])
-                agent_category[agent_idx-del_num] = track_df['object_category'].values[0]
-                position[agent_idx-del_num, agent_steps, :2] = torch.from_numpy(np.stack([track_df['position_x'].values,
+            valid_mask[agent_idx, agent_steps] = True
+            current_valid_mask[agent_idx] = valid_mask[agent_idx, self.num_historical_steps - 1]
+            predict_mask[agent_idx, agent_steps] = True
+            if self.vector_repr:  # a time step t is valid only when both t and t-1 are valid
+                valid_mask[agent_idx, 1: self.num_historical_steps] = (
+                        valid_mask[agent_idx, :self.num_historical_steps - 1] &
+                        valid_mask[agent_idx, 1: self.num_historical_steps])
+                valid_mask[agent_idx, 0] = False
+            predict_mask[agent_idx, :self.num_historical_steps] = False
+            if not current_valid_mask[agent_idx]:
+                predict_mask[agent_idx, self.num_historical_steps:] = False
+
+            agent_id[agent_idx] = track_id
+            agent_type[agent_idx] = self._agent_types.index(track_df['object_type'].values[0])
+            agent_category[agent_idx] = track_df['object_category'].values[0]
+            position[agent_idx, agent_steps, :2] = torch.from_numpy(np.stack([track_df['position_x'].values,
                                                                               track_df['position_y'].values],
                                                                              axis=-1)).float()
-                heading[agent_idx-del_num, agent_steps] = torch.from_numpy(track_df['heading'].values).float()
-                velocity[agent_idx-del_num, agent_steps, :2] = torch.from_numpy(np.stack([track_df['velocity_x'].values,
+            heading[agent_idx, agent_steps] = torch.from_numpy(track_df['heading'].values).float()
+            velocity[agent_idx, agent_steps, :2] = torch.from_numpy(np.stack([track_df['velocity_x'].values,
                                                                               track_df['velocity_y'].values],
                                                                              axis=-1)).float()
-
-        print('current_num_agents:'+str(num_agents)+'\n')
 
         if self.split == 'test':
             predict_mask[current_valid_mask
