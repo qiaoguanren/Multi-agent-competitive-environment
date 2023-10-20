@@ -50,6 +50,7 @@ class NLLLoss(nn.Module):
                                   target=target[..., [i]])
                  for i in range(target.size(-1))],
                 dim=-1)
+
         else:
             nll = self.nll_loss(pred=pred, target=target)
         if self.reduction == 'mean':

@@ -240,8 +240,8 @@ class QCNet(pl.LightningModule):
         #                          prob=pi,
         #                          mask=reg_mask[:, -1:]) * cls_mask
         # cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
-        self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+        self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=True, on_epoch=True, batch_size=1)
+        self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=True, on_epoch=True, batch_size=1)
         # self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         loss = reg_loss_propose + reg_loss_refine
         return loss
@@ -324,10 +324,11 @@ class QCNet(pl.LightningModule):
         #                          prob=pi,
         #                          mask=reg_mask[:, -1:]) * cls_mask
         # cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
-        self.log('val_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
+        self.log('val_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=True, on_epoch=True, batch_size=1,
                  sync_dist=True)
-        self.log('val_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
+        self.log('val_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=True, on_epoch=True, batch_size=1,
                  sync_dist=True)
+        # print('val_reg_loss_propose\t', reg_loss_propose, '\tval_reg_loss_refine\t', reg_loss_refine)
         # self.log('val_cls_loss', cls_loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
 
         if self.dataset == 'argoverse_v2':
@@ -361,6 +362,7 @@ class QCNet(pl.LightningModule):
         self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_minFHE', self.minFHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_MR', self.MR, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
+        print('val_minADE\t', self.minADE.compute().item())
 
     def test_step(self,
                   data,

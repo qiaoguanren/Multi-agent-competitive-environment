@@ -54,7 +54,7 @@ if __name__ == '__main__':
     pl.seed_everything(2023, workers=True)
 
     parser = ArgumentParser()
-    parser.add_argument('--config', type=str, default='configs/train_qcnet.yaml', help='Path to the configuration file')
+    parser.add_argument('--config', type=str, default='configs/train_qcnet_heatmap.yaml', help='Path to the configuration file')
     args = parser.parse_args()
 
     
@@ -74,13 +74,17 @@ if __name__ == '__main__':
     datamodule = {
         'argoverse_v2': ArgoverseV2DataModule,
     }[config_args['QCNet']['dataset']](**config_args)
-    model_checkpoint = ModelCheckpoint(monitor='val_minFDE', save_top_k=5, mode='min')
+    model_checkpoint = ModelCheckpoint(monitor='val_minADE', save_top_k=5, mode='min')
     
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
+    # trainer = pl.Trainer(accelerator=config_args['accelerator'], devices=config_args['devices'],
+    #                      strategy=DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True),
+    #                      callbacks=[model_checkpoint, lr_monitor], max_epochs=config_args['max_epochs'],
+    #                      precision="16")
     trainer = pl.Trainer(accelerator=config_args['accelerator'], devices=config_args['devices'],
                          strategy=DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True),
                          callbacks=[model_checkpoint, lr_monitor], max_epochs=config_args['max_epochs'],
-                         precision="16")
+                         val_check_interval=10, precision="16")
     
     trainer.fit(model, datamodule)
