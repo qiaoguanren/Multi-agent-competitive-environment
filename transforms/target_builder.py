@@ -42,6 +42,9 @@ class TargetBuilder(BaseTransform):
             rot_mat[:, :, 1, 1] = cos
             data['agent']['target'] = torch.matmul((data['agent']['position'][:, (self.num_historical_steps):, :2] -
                                                         origin[:, :, :2]).unsqueeze(-2), rot_mat).squeeze(-2)
+            data['agent']['target'][..., 3] = wrap_angle(data['agent']['heading'][:, self.num_historical_steps:] -
+                                                            theta.unsqueeze(-1))
+
             return data
         
         origin = data['agent']['position'][:, self.num_historical_steps - 1]

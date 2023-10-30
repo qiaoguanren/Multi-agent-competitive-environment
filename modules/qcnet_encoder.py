@@ -70,3 +70,9 @@ class QCNetEncoder(nn.Module):
         map_enc = self.map_encoder(data)
         agent_enc = self.agent_encoder(data, map_enc)
         return {**map_enc, **agent_enc}
+    
+    def map_encode(self, data: HeteroData) -> Dict[str, torch.Tensor]:
+        return {**self.map_encoder(data)}
+    
+    def agent_encode(self, data: HeteroData, map_enc: Dict[str, torch.Tensor], step: Optional[int] = None) -> Dict[str, torch.Tensor]:
+        return {**self.agent_encoder(data, map_enc, step)}

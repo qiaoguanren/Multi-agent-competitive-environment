@@ -34,6 +34,7 @@ from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
 
+
 try:
     from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
 except ImportError:
@@ -105,6 +106,8 @@ class QCNet(pl.LightningModule):
         self.submission_dir = submission_dir
         self.submission_file_name = submission_file_name
         self.agent_limit = agent_limit
+        self.evaluate_type = evaluate_type
+        
 
         self.encoder = QCNetEncoder(
             dataset=dataset,
@@ -245,6 +248,139 @@ class QCNet(pl.LightningModule):
         # self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         loss = reg_loss_propose + reg_loss_refine
         return loss
+    
+    def auto_regressive_inference(self, data):
+        position = data['agent']['position'].clone()
+        heading = data['agent']['heading'].clone()
+        velocity = data['agent']['velocity'].clone()
+        valid_mask = data['agent']['valid_mask'].clone()
+        predict_mask = data['agent']['predict_mask'].clone()
+        data['agent']['position'][:, :self.num_historical_steps] = 0
+        data['agent']['heading'][:, :self.num_historical_steps] = 0
+        data['agent']['velocity'][:, self.num_historical_steps:] = 0 # Ensures information in the future is unseen
+
+        loc_propose_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        scale_propose_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        loc_propose_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        conc_propose_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        loc_refine_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        scale_refine_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        loc_refine_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        conc_refine_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        pi = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, device=self.device)
+
+        map_enc = self.encoder.map_encode(data)
+
+        last_pos = position[:, self.num_historical_steps-1:self.num_historical_steps, :self.output_dim].unsqueeze(1)
+        last_heading = heading[:, self.num_historical_steps-1:self.num_historical_steps].unsqueeze(1).unsqueeze(-1)
+
+        for step in range(self.num_historical_steps, self.num_future_steps):
+            agent_enc = self.encoder.agent_encode(data, map_enc, step)
+
+            pred_i = self.decoder(data, {**map_enc, **agent_enc}, step=step)
+            data['agent']['position'][:, step:step+1, :self.output_dim] = (last_pos + pred_i['loc_refine_pos']).squeeze(1)
+            last_pos = data['agent']['position'][:, step:step+1, :self.output_dim].unsqueeze(1)
+            data['agent']['heading'][:, step:step+1] = (last_heading + pred_i['conc_refine_head']).squeeze(1).squeeze(-1)
+            last_heading = data['agent']['heading'][:, step:step+1].unsqueeze(1).unsqueeze(-1)
+            data['agent']['velocity'][:, step:step+1, :self.output_dim] = pred_i['loc_refine_pos'].squeeze(1) * 10
+            data['agent']['predict_mask'][:, step:step+1] = True
+            data['agent']['valid_mask'][:, step:step+1] = True
+
+            # import pdb; pdb.set_trace()
+            loc_propose_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_propose_pos']
+            scale_propose_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['scale_propose_pos']
+            loc_propose_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_propose_head']
+            conc_propose_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['conc_propose_head']
+            loc_refine_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_refine_pos']
+            scale_refine_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['scale_refine_pos']
+            loc_refine_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_refine_head']
+            conc_refine_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['conc_refine_head']
+            pi[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['pi']
+        
+        data['agent']['position'] = position
+        data['agent']['heading'] = heading
+        data['agent']['velocity'] = velocity
+        data['agent']['valid_mask'] = valid_mask
+        data['agent']['predict_mask'] = predict_mask
+
+        return {
+            'loc_propose_pos': loc_propose_pos,
+            'scale_propose_pos': scale_propose_pos,
+            'loc_propose_head': loc_propose_head,
+            'conc_propose_head': conc_propose_head,
+            'loc_refine_pos': loc_refine_pos,
+            'scale_refine_pos': scale_refine_pos,
+            'loc_refine_head': loc_refine_head,
+            'conc_refine_head': conc_refine_head,
+            'pi': pi,
+        }
+
+
+    def auto_regressive_inference2(self, data):
+        position = data['agent']['position'].clone()
+        heading = data['agent']['heading'].clone()
+        velocity = data['agent']['velocity'].clone()
+        valid_mask = data['agent']['valid_mask'].clone()
+        predict_mask = data['agent']['predict_mask'].clone()
+        data['agent']['position'][:, :self.num_historical_steps] = 0
+        data['agent']['heading'][:, :self.num_historical_steps] = 0
+        data['agent']['velocity'][:, self.num_historical_steps:] = 0 # Ensures information in the future is unseen
+
+        loc_propose_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        scale_propose_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        loc_propose_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        conc_propose_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        loc_refine_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        scale_refine_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
+        loc_refine_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        conc_refine_head = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, 1, device=self.device)
+        pi = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, device=self.device)
+
+        map_enc = self.encoder.map_encode(data)
+
+        last_pos = position[:, self.num_historical_steps-1:self.num_historical_steps, :self.output_dim].unsqueeze(1)
+        last_heading = heading[:, self.num_historical_steps-1:self.num_historical_steps].unsqueeze(1).unsqueeze(-1)
+
+        for step in range(self.num_historical_steps, self.num_future_steps):
+            agent_enc = self.encoder.agent_encode(data, map_enc)
+
+            pred_i = self.decoder(data, {**map_enc, **agent_enc})
+            data['agent']['position'][:, step:step+1, :self.output_dim] = (last_pos + pred_i['loc_refine_pos'][:, :, step:step+1]).squeeze(1)
+            last_pos = data['agent']['position'][:, step:step+1, :self.output_dim].unsqueeze(1)
+            data['agent']['heading'][:, step:step+1] = (last_heading + pred_i['conc_refine_head'][:, :, step:step+1]).squeeze(1).squeeze(-1)
+            last_heading = data['agent']['heading'][:, step:step+1].unsqueeze(1).unsqueeze(-1)
+            data['agent']['velocity'][:, step:step+1, :self.output_dim] = pred_i['loc_refine_pos'][:, :, step:step+1].squeeze(1) * 10
+            data['agent']['predict_mask'][:, step:step+1] = True
+            data['agent']['valid_mask'][:, step:step+1] = True
+
+            # import pdb; pdb.set_trace()
+            loc_propose_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_propose_pos'][:, :, step:step+1]
+            scale_propose_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['scale_propose_pos'][:, :, step:step+1]
+            loc_propose_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_propose_head'][:, :, step:step+1]
+            conc_propose_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['conc_propose_head'][:, :, step:step+1]
+            loc_refine_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_refine_pos'][:, :, step:step+1]
+            scale_refine_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['scale_refine_pos'][:, :, step:step+1]
+            loc_refine_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_refine_head'][:, :, step:step+1]
+            conc_refine_head[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['conc_refine_head'][:, :, step:step+1]
+            pi[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['pi'][:, :, step:step+1]
+        
+        data['agent']['position'] = position
+        data['agent']['heading'] = heading
+        data['agent']['velocity'] = velocity
+        data['agent']['valid_mask'] = valid_mask
+        data['agent']['predict_mask'] = predict_mask
+
+        return {
+            'loc_propose_pos': loc_propose_pos,
+            'scale_propose_pos': scale_propose_pos,
+            'loc_propose_head': loc_propose_head,
+            'conc_propose_head': conc_propose_head,
+            'loc_refine_pos': loc_refine_pos,
+            'scale_refine_pos': scale_refine_pos,
+            'loc_refine_head': loc_refine_head,
+            'conc_refine_head': conc_refine_head,
+            'pi': pi,
+        }
 
     def validation_step(self,
                         data,
@@ -252,6 +388,7 @@ class QCNet(pl.LightningModule):
         if isinstance(data, Batch):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         
+
         min_valid_steps = 20
         original_num_nodes = data['agent']['num_nodes']
         agent_limit = self.agent_limit
@@ -287,9 +424,15 @@ class QCNet(pl.LightningModule):
 
             # print(f"Reduced data due to agent number exceeded limit: {original_num_nodes} > {agent_limit}. After reduction, agent_num = ", data['agent']['num_nodes'].item())
         
+        # import pdb; pdb.set_trace()
+           
+        
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data)
+        if self.evaluate_type == 'auto_regressive':
+            pred = self.auto_regressive_inference2(data)
+        else:
+            pred = self(data)
         if self.output_head:
             traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
                                       pred['loc_propose_head'],
