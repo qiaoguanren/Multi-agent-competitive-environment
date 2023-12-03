@@ -33,6 +33,7 @@ from metrics import minFDE
 from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
+from utils import wrap_angle
 
 
 try:
@@ -144,17 +145,16 @@ class QCNet(pl.LightningModule):
             head_dim=head_dim,
             dropout=dropout,
         )
-
         self.reg_loss = NLLLoss(component_distribution=['laplace'] * output_dim + ['von_mises'] * output_head,
                                 reduction='none')
         self.cls_loss = MixtureNLLLoss(component_distribution=['laplace'] * output_dim + ['von_mises'] * output_head,
                                        reduction='none')
 
-        self.Brier = Brier(max_guesses=6)
-        self.minADE = minADE(max_guesses=6)
-        self.minAHE = minAHE(max_guesses=6)
-        self.minFDE = minFDE(max_guesses=6)
-        self.minFHE = minFHE(max_guesses=6)
+        self.Brier = Brier(max_guesses=1)
+        self.minADE = minADE(max_guesses=1)
+        self.minAHE = minAHE(max_guesses=1)
+        self.minFDE = minFDE(max_guesses=1)
+        self.minFHE = minFHE(max_guesses=1)
         self.MR = MR(max_guesses=6)
 
         self.test_predictions = dict()
@@ -171,40 +171,42 @@ class QCNet(pl.LightningModule):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
 
         min_valid_steps = 40
+        min_displacement = 0.1
         original_num_nodes = data['agent']['num_nodes']
         agent_limit = self.agent_limit
-
-        if data['agent']['num_nodes'] > agent_limit:
-            # return None
-            gt_dis_norm = (data['agent']['position'][:, -1, :2] - data['agent']['position'][:, 0, :2]).norm(dim=-1) # N
-            valid_mask = (data['agent']['predict_mask'].sum(-1) >= min_valid_steps) & (data['agent']['predict_mask'][:, -1] != 0)
-            # valid_mask = valid_mask & (gt_dis_norm > min_displacement)
-            data['agent']['num_nodes'] = valid_mask.sum()
-            data['agent']['valid_mask'] = data['agent']['valid_mask'][valid_mask]
-            data['agent']['predict_mask'] = data['agent']['predict_mask'][valid_mask]
-            data['agent']['type'] = data['agent']['type'][valid_mask]
-            data['agent']['category'] = data['agent']['category'][valid_mask]
-            data['agent']['position'] = data['agent']['position'][valid_mask]
-            data['agent']['heading'] = data['agent']['heading'][valid_mask]
-            data['agent']['velocity'] = data['agent']['velocity'][valid_mask]
-            data['agent']['target'] = data['agent']['target'][valid_mask]
-            data['agent']['batch'] = data['agent']['batch'][valid_mask]
-            data['agent']['ptr'][1] = data['agent']['num_nodes']
-            if data['agent']['num_nodes'] > agent_limit:
-                data['agent']['num_nodes'] = agent_limit
-                data['agent']['valid_mask'] = data['agent']['valid_mask'][:agent_limit]
-                data['agent']['predict_mask'] = data['agent']['predict_mask'][:agent_limit]
-                data['agent']['type'] = data['agent']['type'][:agent_limit]
-                data['agent']['category'] = data['agent']['category'][:agent_limit]
-                data['agent']['position'] = data['agent']['position'][:agent_limit]
-                data['agent']['heading'] = data['agent']['heading'][:agent_limit]
-                data['agent']['velocity'] = data['agent']['velocity'][:agent_limit]
-                data['agent']['target'] = data['agent']['target'][:agent_limit]
-                data['agent']['batch'] = data['agent']['batch'][:agent_limit]
-                data['agent']['ptr'][1] = data['agent']['num_nodes']
-
-            # print(f"Reduced data due to agent number exceeded limit: {original_num_nodes} > {agent_limit}. After reduction, agent_num = ", data['agent']['num_nodes'].item())
         
+        # if data['agent']['num_nodes'] > agent_limit:
+            # return None
+        valid_mask = (data['agent']['predict_mask'].sum(-1) >= min_valid_steps) & (data['agent']['predict_mask'][:, -1] != 0)
+        gt_dis_norm = (data['agent']['position'][:, -1, :2] - data['agent']['position'][:, 0, :2]).norm(dim=-1) * valid_mask # N
+        valid_mask = valid_mask & (gt_dis_norm > min_displacement)
+        data['agent']['num_nodes'] = valid_mask.sum()
+        data['agent']['valid_mask'] = data['agent']['valid_mask'][valid_mask]
+        data['agent']['predict_mask'] = data['agent']['predict_mask'][valid_mask]
+        data['agent']['type'] = data['agent']['type'][valid_mask]
+        data['agent']['category'] = data['agent']['category'][valid_mask]
+        data['agent']['position'] = data['agent']['position'][valid_mask]
+        data['agent']['heading'] = data['agent']['heading'][valid_mask]
+        data['agent']['velocity'] = data['agent']['velocity'][valid_mask]
+        data['agent']['target'] = data['agent']['target'][valid_mask]
+        data['agent']['batch'] = data['agent']['batch'][valid_mask]
+        data['agent']['ptr'][1] = data['agent']['num_nodes']
+        if data['agent']['num_nodes'] > agent_limit:
+            data['agent']['num_nodes'] = agent_limit
+            data['agent']['valid_mask'] = data['agent']['valid_mask'][:agent_limit]
+            data['agent']['predict_mask'] = data['agent']['predict_mask'][:agent_limit]
+            data['agent']['type'] = data['agent']['type'][:agent_limit]
+            data['agent']['category'] = data['agent']['category'][:agent_limit]
+            data['agent']['position'] = data['agent']['position'][:agent_limit]
+            data['agent']['heading'] = data['agent']['heading'][:agent_limit]
+            data['agent']['velocity'] = data['agent']['velocity'][:agent_limit]
+            data['agent']['target'] = data['agent']['target'][:agent_limit]
+            data['agent']['batch'] = data['agent']['batch'][:agent_limit]
+            data['agent']['ptr'][1] = data['agent']['num_nodes']
+
+            print(f"Reduced data due to agent number exceeded limit: {original_num_nodes} > {agent_limit}. After reduction, agent_num = ", data['agent']['num_nodes'])
+        
+        # import pdb; pdb.set_trace()
         
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
@@ -322,9 +324,11 @@ class QCNet(pl.LightningModule):
         velocity = data['agent']['velocity'].clone()
         valid_mask = data['agent']['valid_mask'].clone()
         predict_mask = data['agent']['predict_mask'].clone()
-        data['agent']['position'][:, :self.num_historical_steps] = 0
-        data['agent']['heading'][:, :self.num_historical_steps] = 0
+        data['agent']['position'][:, self.num_historical_steps:] = 0
+        data['agent']['heading'][:, self.num_historical_steps:] = 0
         data['agent']['velocity'][:, self.num_historical_steps:] = 0 # Ensures information in the future is unseen
+        data['agent']['valid_mask'][:, self.num_historical_steps+1:] = False
+        data['agent']['predict_mask'][:, self.num_historical_steps+1:] = False
 
         loc_propose_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
         scale_propose_pos = torch.zeros(data['agent']['num_nodes'], self.num_modes, self.num_future_steps, self.output_dim, device=self.device)
@@ -340,18 +344,52 @@ class QCNet(pl.LightningModule):
 
         last_pos = position[:, self.num_historical_steps-1:self.num_historical_steps, :self.output_dim].unsqueeze(1)
         last_heading = heading[:, self.num_historical_steps-1:self.num_historical_steps].unsqueeze(1).unsqueeze(-1)
-
-        for step in range(self.num_historical_steps, self.num_future_steps):
+        
+        # origin_eval = data['agent']['position'][eval_mask, self.num_historical_steps - 1]
+        # theta = data['agent']['heading'][:, self.num_historical_steps - 1]
+        # cos, sin = theta.cos(), theta.sin()
+        # rot_mat = torch.zeros(theta.shape[0], 2, 2, device=self.device)
+        # rot_mat[:, 0, 0] = cos
+        # rot_mat[:, 0, 1] = sin
+        # rot_mat[:, 1, 0] = -sin
+        # rot_mat[:, 1, 1] = cos
+        # traj_eval = torch.matmul(traj_refine[eval_mask, :, :, :2],
+        #                          rot_mat.unsqueeze(1)) + origin_eval[:, :2].reshape(-1, 1, 1, 2)
+        for step in range(0, self.num_future_steps-1):
             agent_enc = self.encoder.agent_encode(data, map_enc)
 
             pred_i = self.decoder(data, {**map_enc, **agent_enc})
-            data['agent']['position'][:, step:step+1, :self.output_dim] = (last_pos + pred_i['loc_refine_pos'][:, :, step:step+1]).squeeze(1)
-            last_pos = data['agent']['position'][:, step:step+1, :self.output_dim].unsqueeze(1)
-            data['agent']['heading'][:, step:step+1] = (last_heading + pred_i['conc_refine_head'][:, :, step:step+1]).squeeze(1).squeeze(-1)
-            last_heading = data['agent']['heading'][:, step:step+1].unsqueeze(1).unsqueeze(-1)
-            data['agent']['velocity'][:, step:step+1, :self.output_dim] = pred_i['loc_refine_pos'][:, :, step:step+1].squeeze(1) * 10
-            data['agent']['predict_mask'][:, step:step+1] = True
-            data['agent']['valid_mask'][:, step:step+1] = True
+
+            pred_i['loc_propose_pos'] = pred_i['loc_propose_pos'][:, :, -self.num_future_steps:]
+            pred_i['loc_propose_head'] = pred_i['loc_propose_head'][:, :, -self.num_future_steps:]
+            pred_i['conc_propose_head'] = pred_i['conc_propose_head'][:, :, -self.num_future_steps:]
+            pred_i['loc_refine_pos'] = pred_i['loc_refine_pos'][:, :, -self.num_future_steps:]
+            pred_i['scale_refine_pos'] = pred_i['scale_refine_pos'][:, :, -self.num_future_steps:]
+            pred_i['loc_refine_head'] = pred_i['loc_refine_head'][:, :, -self.num_future_steps:]
+            pred_i['conc_refine_head'] = pred_i['conc_refine_head'][:, :, -self.num_future_steps:]
+
+            actual_step = step + self.num_historical_steps
+            
+            # Rotating Relative Position to absolute position
+            theta = data['agent']['heading'][:, actual_step - 1]
+            rot_mat = torch.zeros(theta.shape[0], 2, 2, device=self.device)
+            cos, sin = theta.cos(), theta.sin()
+            rot_mat[:, 0, 0] = cos
+            rot_mat[:, 0, 1] = sin
+            rot_mat[:, 1, 0] = -sin
+            rot_mat[:, 1, 1] = cos
+            rel_pos = pred_i['loc_refine_pos'][:, :, step:step+1]
+            rel_pos = torch.matmul(rel_pos[:, :, :, :2], rot_mat.unsqueeze(1))
+
+            data['agent']['position'][:, actual_step:actual_step+1, :self.output_dim] = (last_pos + rel_pos).squeeze(1)
+            last_pos = data['agent']['position'][:, actual_step:actual_step+1, :self.output_dim].unsqueeze(1)
+            data['agent']['heading'][:, actual_step:actual_step+1] = (last_heading + pred_i['loc_refine_head'][:, :, step:step+1]).squeeze(1).squeeze(-1)
+            last_heading = data['agent']['heading'][:, actual_step:actual_step+1].unsqueeze(1).unsqueeze(-1)
+
+
+            data['agent']['velocity'][:, actual_step:actual_step+1, :self.output_dim] = pred_i['loc_refine_pos'][:, :, step:step+1].squeeze(1) * 10
+            data['agent']['predict_mask'][:, actual_step:actual_step+1] = True
+            data['agent']['valid_mask'][:, actual_step:actual_step+1] = True
 
             # import pdb; pdb.set_trace()
             loc_propose_pos[:, :, step-self.num_historical_steps:step-self.num_historical_steps+1] = pred_i['loc_propose_pos'][:, :, step:step+1]
@@ -369,6 +407,25 @@ class QCNet(pl.LightningModule):
         data['agent']['velocity'] = velocity
         data['agent']['valid_mask'] = valid_mask
         data['agent']['predict_mask'] = predict_mask
+
+        dis = loc_refine_pos.squeeze(1) - data['agent']['position'][:, self.num_historical_steps:, :2]
+        # import pdb; pdb.set_trace()
+
+
+        # origin = data['agent']['position'][:, self.num_historical_steps - 1]
+        # theta = data['agent']['heading'][:, self.num_historical_steps - 1]
+        # cos, sin = theta.cos(), theta.sin()
+        # rot_mat = theta.new_zeros(data['agent']['num_nodes'], 2, 2)
+        # rot_mat[:, 0, 0] = cos
+        # rot_mat[:, 0, 1] = -sin
+        # rot_mat[:, 1, 0] = sin
+        # rot_mat[:, 1, 1] = cos
+        # loc_propose_pos = torch.bmm(loc_propose_pos.squeeze(1) - origin[:, :2].unsqueeze(1), rot_mat).unsqueeze(1)
+        # loc_refine_pos = torch.bmm(loc_refine_pos.squeeze(1) - origin[:, :2].unsqueeze(1), rot_mat).unsqueeze(1)
+        # loc_propose_head = wrap_angle(loc_propose_head.squeeze(1).squeeze(-1) - theta.unsqueeze(-1)).unsqueeze(1).unsqueeze(-1)
+        # conc_propose_head = wrap_angle(conc_propose_head.squeeze(1).squeeze(-1) - theta.unsqueeze(-1)).unsqueeze(1).unsqueeze(-1)
+        # loc_refine_head = wrap_angle(loc_refine_head.squeeze(1).squeeze(-1) - theta.unsqueeze(-1)).unsqueeze(1).unsqueeze(-1)
+        # conc_refine_head = wrap_angle(conc_refine_head.squeeze(1).squeeze(-1) - theta.unsqueeze(-1)).unsqueeze(1).unsqueeze(-1)
 
         return {
             'loc_propose_pos': loc_propose_pos,
@@ -388,44 +445,44 @@ class QCNet(pl.LightningModule):
         if isinstance(data, Batch):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
         
-
-        min_valid_steps = 20
+        min_valid_steps = 30
+        min_displacement = 0.1
         original_num_nodes = data['agent']['num_nodes']
         agent_limit = self.agent_limit
 
-        if data['agent']['num_nodes'] > agent_limit:
+        # if data['agent']['num_nodes'] > agent_limit:
             # return None
-            gt_dis_norm = (data['agent']['position'][:, -1, :2] - data['agent']['position'][:, 0, :2]).norm(dim=-1) # N
-            valid_mask = (data['agent']['predict_mask'].sum(-1) >= min_valid_steps) & (data['agent']['predict_mask'][:, -1] != 0)
-            # valid_mask = valid_mask & (gt_dis_norm > min_displacement)
-            data['agent']['num_nodes'] = valid_mask.sum()
-            data['agent']['valid_mask'] = data['agent']['valid_mask'][valid_mask]
-            data['agent']['predict_mask'] = data['agent']['predict_mask'][valid_mask]
-            data['agent']['type'] = data['agent']['type'][valid_mask]
-            data['agent']['category'] = data['agent']['category'][valid_mask]
-            data['agent']['position'] = data['agent']['position'][valid_mask]
-            data['agent']['heading'] = data['agent']['heading'][valid_mask]
-            data['agent']['velocity'] = data['agent']['velocity'][valid_mask]
-            data['agent']['target'] = data['agent']['target'][valid_mask]
-            data['agent']['batch'] = data['agent']['batch'][valid_mask]
+        valid_mask = (data['agent']['predict_mask'].sum(-1) >= min_valid_steps) & (data['agent']['predict_mask'][:, -1] != 0)
+        gt_dis_norm = (data['agent']['position'][:, -1, :2] - data['agent']['position'][:, 0, :2]).norm(dim=-1) * valid_mask # N
+        valid_mask = valid_mask & (gt_dis_norm > min_displacement)
+        data['agent']['num_nodes'] = valid_mask.sum()
+        data['agent']['valid_mask'] = data['agent']['valid_mask'][valid_mask]
+        data['agent']['predict_mask'] = data['agent']['predict_mask'][valid_mask]
+        data['agent']['type'] = data['agent']['type'][valid_mask]
+        data['agent']['category'] = data['agent']['category'][valid_mask]
+        data['agent']['position'] = data['agent']['position'][valid_mask]
+        data['agent']['heading'] = data['agent']['heading'][valid_mask]
+        data['agent']['velocity'] = data['agent']['velocity'][valid_mask]
+        data['agent']['target'] = data['agent']['target'][valid_mask]
+        data['agent']['batch'] = data['agent']['batch'][valid_mask]
+        data['agent']['ptr'][1] = data['agent']['num_nodes']
+        if data['agent']['num_nodes'] > agent_limit:
+            data['agent']['num_nodes'] = agent_limit
+            data['agent']['valid_mask'] = data['agent']['valid_mask'][:agent_limit]
+            data['agent']['predict_mask'] = data['agent']['predict_mask'][:agent_limit]
+            data['agent']['type'] = data['agent']['type'][:agent_limit]
+            data['agent']['category'] = data['agent']['category'][:agent_limit]
+            data['agent']['position'] = data['agent']['position'][:agent_limit]
+            data['agent']['heading'] = data['agent']['heading'][:agent_limit]
+            data['agent']['velocity'] = data['agent']['velocity'][:agent_limit]
+            data['agent']['target'] = data['agent']['target'][:agent_limit]
+            data['agent']['batch'] = data['agent']['batch'][:agent_limit]
             data['agent']['ptr'][1] = data['agent']['num_nodes']
-            if data['agent']['num_nodes'] > agent_limit:
-                data['agent']['num_nodes'] = agent_limit
-                data['agent']['valid_mask'] = data['agent']['valid_mask'][:agent_limit]
-                data['agent']['predict_mask'] = data['agent']['predict_mask'][:agent_limit]
-                data['agent']['type'] = data['agent']['type'][:agent_limit]
-                data['agent']['category'] = data['agent']['category'][:agent_limit]
-                data['agent']['position'] = data['agent']['position'][:agent_limit]
-                data['agent']['heading'] = data['agent']['heading'][:agent_limit]
-                data['agent']['velocity'] = data['agent']['velocity'][:agent_limit]
-                data['agent']['target'] = data['agent']['target'][:agent_limit]
-                data['agent']['batch'] = data['agent']['batch'][:agent_limit]
-                data['agent']['ptr'][1] = data['agent']['num_nodes']
 
             # print(f"Reduced data due to agent number exceeded limit: {original_num_nodes} > {agent_limit}. After reduction, agent_num = ", data['agent']['num_nodes'].item())
         
         # import pdb; pdb.set_trace()
-           
+        
         
         reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
         cls_mask = data['agent']['predict_mask'][:, -1]
@@ -449,6 +506,7 @@ class QCNet(pl.LightningModule):
                                      pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
         pi = pred['pi']
         gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
+        # import pdb; pdb.set_trace()
         l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
                               gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
@@ -500,11 +558,12 @@ class QCNet(pl.LightningModule):
         self.MR.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
                        valid_mask=valid_mask_eval)
         self.log('val_Brier', self.Brier, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        self.log('val_minADE', self.minADE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
+        self.log('val_minADE', self.minADE, prog_bar=True, on_step=True, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_minAHE', self.minAHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_minFHE', self.minFHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_MR', self.MR, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
+        # import pdb; pdb.set_trace()
         print('val_minADE\t', self.minADE.compute().item())
 
     def test_step(self,

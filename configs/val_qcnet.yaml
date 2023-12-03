@@ -1,17 +1,18 @@
-root: /root/paddlejob/workspace/rongxiao/Argoverse2
+root: /root/paddlejob/workspace/rongxiao/Argoverse2_random_sample_val_train
 model: QCNet
 batch_size: 1
 # shuffle: True
-num_workers: 160
+num_workers: 16
 pin_memory: True
 persistent_workers: True
 accelerator: auto
-devices: [0]
+devices: 1
 teacher_forcing: False
 num_historical_steps: 10
 num_future_steps: 100
 
-checkpoint_path: /root/paddlejob/workspace/rongxiao/Multi-agent-Inverse-Constraint-Reinforcement-Learning/lightning_logs/version_88/checkpoints/epoch=0-step=40000.ckpt
+# checkpoint_path: /root/paddlejob/workspace/rongxiao/Multi-agent-Inverse-Constraint-Reinforcement-Learning/lightning_logs/teacher_forcing_wh3/checkpoints/epoch=3-step=99956.ckpt
+# checkpoint_path: /root/paddlejob/workspace/rongxiao/Multi-agent-Inverse-Constraint-Reinforcement-Learning/lightning_logs/version_166/checkpoints/epoch=93-step=4700.ckpt
 
 QCNet:
   dataset: argoverse_v2
@@ -19,8 +20,8 @@ QCNet:
   hidden_dim: 128
   output_dim: 2
   output_head: True
-  num_historical_steps: 10
-  num_future_steps: 100
+  num_historical_steps: 50
+  num_future_steps: 60
   num_modes: 1
   num_recurrent_steps: 1
   num_freq_bands: 64
@@ -37,11 +38,11 @@ QCNet:
   num_t2m_steps: 30
   pl2m_radius: 150
   a2m_radius: 50 # reduced from 150
-  lr: 0.0003
+  lr: 0.00001
   weight_decay: 0.0001
   T_max: 64
   submission_dir: ./
   submission_file_name: submission
   evaluate_type: auto_regressive
-  agent_limit: 15
+  agent_limit: 30
   

@@ -44,6 +44,7 @@ class minADE(Metric):
             inds_best = torch.norm(
                 pred_topk[torch.arange(pred.size(0)), :, inds_last] -
                 target[torch.arange(pred.size(0)), inds_last].unsqueeze(-2), p=2, dim=-1).argmin(dim=-1)
+            # import pdb; pdb.set_trace()
             self.sum += ((torch.norm(pred_topk[torch.arange(pred.size(0)), inds_best] - target, p=2, dim=-1) *
                           valid_mask).sum(dim=-1) / valid_mask.sum(dim=-1)).sum()
         elif min_criterion == 'ADE':

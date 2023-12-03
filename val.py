@@ -44,11 +44,14 @@ if __name__ == '__main__':
             config_args = yaml.safe_load(stream)
         except yaml.YAMLError as exc:
             print(exc)
-    
+    checkpoint_path = config_args.get('checkpoint_path', None)
     model = {
         'QCNet': QCNet,
-    }[config_args['model']].load_from_checkpoint(checkpoint_path=config_args['checkpoint_path'])
+    }[config_args['model']].load_from_checkpoint(checkpoint_path)
+    
     model.evaluate_type = config_args['QCNet']['evaluate_type']
+    model.num_historical_steps = config_args['QCNet']['num_historical_steps']
+    model.num_future_steps = config_args['QCNet']['num_future_steps']
     
     
     

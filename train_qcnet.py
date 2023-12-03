@@ -92,6 +92,7 @@ if __name__ == '__main__':
         model = QCNet(**config_args['QCNet'])
 
     model.lr = config_args['QCNet']['lr']
+    model.evaluate_type = config_args['QCNet']['evaluate_type']
     
     datamodule = {
         'argoverse_v2': ArgoverseV2DataModule,
@@ -100,13 +101,13 @@ if __name__ == '__main__':
     
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    # trainer = pl.Trainer(accelerator=config_args['accelerator'], devices=config_args['devices'],
-    #                      strategy=DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True),
-    #                      callbacks=[model_checkpoint, lr_monitor], max_epochs=config_args['max_epochs'],
-    #                      precision="16")
     trainer = pl.Trainer(accelerator=config_args['accelerator'], devices=config_args['devices'],
                          strategy=DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True),
                          callbacks=[model_checkpoint, lr_monitor], max_epochs=config_args['max_epochs'],
-                         val_check_interval=20000, precision="16")
+                         precision="16")
+    # trainer = pl.Trainer(accelerator=config_args['accelerator'], devices=config_args['devices'],
+    #                      strategy=DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True),
+    #                      callbacks=[model_checkpoint, lr_monitor], max_epochs=config_args['max_epochs'],
+    #                      val_check_interval=1, precision="16")
     
     trainer.fit(model, datamodule)
