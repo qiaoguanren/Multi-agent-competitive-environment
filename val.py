@@ -18,25 +18,26 @@ from torch_geometric.loader import DataLoader
 
 from datasets import ArgoverseV2Dataset
 from predictors import QCNet
+from predictors.autoval import AntoQCNet
 from transforms import TargetBuilder
 
 if __name__ == '__main__':
     pl.seed_everything(2023, workers=True)
 
     parser = ArgumentParser()
-    parser.add_argument('--model', type=str, required=True)
-    parser.add_argument('--root', type=str, required=True)
+    parser.add_argument('--model', type=str,default="QCNet")
+    parser.add_argument('--root', type=str, default="~/Argoverse2/")
     parser.add_argument('--batch_size', type=int, default=32)
     parser.add_argument('--num_workers', type=int, default=8)
     parser.add_argument('--pin_memory', type=bool, default=True)
     parser.add_argument('--persistent_workers', type=bool, default=True)
     parser.add_argument('--accelerator', type=str, default='auto')
     parser.add_argument('--devices', type=int, default=1)
-    parser.add_argument('--ckpt_path', type=str, required=True)
+    parser.add_argument('--ckpt_path', default="checkpoints/QCNet_AV2.ckpt", type=str)
     args = parser.parse_args()
 
     model = {
-        'QCNet': QCNet,
+        'QCNet': AntoQCNet,
     }[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
     val_dataset = {
         'argoverse_v2': ArgoverseV2Dataset,
