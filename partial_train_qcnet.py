@@ -25,7 +25,7 @@ if __name__ == '__main__':
     pl.seed_everything(2023, workers=True)
 
     parser = ArgumentParser()
-    parser.add_argument('--root', type=str, default="~/Argoverse2/")
+    parser.add_argument('--root', type=str, default="/home/guanren/Multi-agent-competitive-environment/datasets/")
     parser.add_argument('--train_batch_size', type=int, default=8)
     parser.add_argument('--val_batch_size', type=int, default=8)
     parser.add_argument('--test_batch_size', type=int, default=8)
@@ -55,12 +55,18 @@ if __name__ == '__main__':
     model_dict = model.state_dict()
     model_dict.update(pretrained_dict) 
     # 3. load the new state dict
-    model.freeze()
-    model.decoder.to_loc_propose_head.requires_grad =True
-    model.decoder.to_conc_propose_head.requires_grad =True
-    model.decoder.to_loc_refine_head.requires_grad =True
-    model.decoder.to_conc_refine_head.requires_grad =True
-    model.decoder.y_emb.requires_grad =True
+    for param in model.parameters():
+        param.requires_grad = False
+    for param in model.decoder.to_loc_propose_head.parameters():
+        param.requires_grad = True
+    for param in model.decoder.to_conc_propose_head.parameters():
+        param.requires_grad = True
+    for param in model.decoder.to_loc_refine_head.parameters():
+        param.requires_grad = True
+    for param in model.decoder.to_conc_refine_head.parameters():
+        param.requires_grad = True
+    for param in model.decoder.y_emb.parameters():
+        param.requires_grad = True
     model.load_state_dict(model_dict)
     
 
