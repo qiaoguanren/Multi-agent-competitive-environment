@@ -17,7 +17,7 @@ play_viedeo="""
 
 @app.route('/')
 def video_list():
-    video_files = [f for f in os.listdir(MEDIA_PATH) if f.endswith('.mp4')]
+    video_files = [os.path.join(root, f) for root, dirs, files in os.walk(MEDIA_PATH) for f in files if f.endswith('.mp4')]
     # Inline HTML template
     template = """
     <!DOCTYPE html>
@@ -65,4 +65,4 @@ def send_media(path):
 #     return app.jinja_env.from_string(template).render({'movie_name': "test.mp4"})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True,port=1221)
