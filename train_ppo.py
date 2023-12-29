@@ -1,7 +1,7 @@
 import pytorch_lightning as pl
 import cv2
 import matplotlib.pyplot as plt
-import io
+import os
 import torch, math
 import yaml
 import numpy as np
@@ -174,5 +174,13 @@ for episode in tqdm(range(episodes)):
         _return = (config['gamma'] * _return) + float(transition_list[agent_index]['rewards'][t])
     cumulative_reward[agent_index]['return'].append(_return)
 
-torch.save(agent.state_dict(), f'~/Multi-agent-competitive-environment/checkpoints/ppo_episodes={episodes}.ckpt')
+pi_state_dict = agent.pi.state_dict()
+old_pi_state_dict = agent.old_pi.state_dict()
+value_state_dict = agent.value.state_dict()
+model_state_dict = {
+    'pi': pi_state_dict,
+    'old_pi': old_pi_state_dict,
+    'value': value_state_dict
+}
+torch.save(model_state_dict, f'~/Multi-agent-competitive-environment/checkpoints/PPO_episodes={episodes}.ckpt')
 vis_reward(new_data,cumulative_reward,agent_index,episodes)
