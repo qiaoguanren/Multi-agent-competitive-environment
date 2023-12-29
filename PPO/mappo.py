@@ -18,68 +18,43 @@ class Policy(nn.Module):
             layer_init(nn.Linear(action_dim, hidden_dim)),
             nn.ReLU(),
             layer_init(nn.Linear(hidden_dim, hidden_dim//2)),
+            nn.ReLU(),
             layer_init(nn.Linear(hidden_dim//2, action_dim))
         )
         self.hidden_dim = hidden_dim
     
-    def forward(self, encoder, decoder, states, data, agent_index):
-        data['agent']['position'][agent_index,50:,:2]=states[:,:2]
-        data['agent']['velocity'][agent_index,50:,:2]=states[:,2:]
+    def forward(self, model, states, action, data, agent_index,offset):
+        data['agent']['position'][agent_index,:50,:2]=states[:,:2]
+        data['agent']['velocity'][agent_index,:50,:2]=states[:,2:4]
+        data['agent']['heading'][agent_index,:50,:2]=states[:,-1]
 
-        pred = decoder(data, encoder(data))
-        origin = data["agent"]["position"][:, 50 - 1]
-        theta = data["agent"]["heading"][:, 50 - 1]
-        cos, sin = theta.cos(), theta.sin()
-        rot_mat = theta.new_zeros(data['agent']['num_nodes'], 2, 2)
-        rot_mat[:, 0, 0] = cos
-        rot_mat[:, 0, 1] = -sin
-        rot_mat[:, 1, 0] = sin
-        rot_mat[:, 1, 1] = cos
+        pred = model(data)
             
-        reg_mask = data['agent']['predict_mask'][:, 50:]
+        reg_mask = data['agent']['predict_mask'][:-1, 50:]
 
-        # gt = torch.cat([data['agent']['target'][..., :2], data['agent']['target'][..., -1:]], dim=-1)
-        # l2_norm = (torch.norm(pred['loc_refine_pos'][..., :2] -
-        #                       gt[..., :2].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        # best_mode = l2_norm.argmin(dim=-1)
-        best_mode = torch.randint(1,size=(data['agent']['num_nodes'],))
-        loc_refine_pos = pred['loc_refine_pos'][torch.arange(pred['loc_refine_pos'].size(0)), best_mode]
-
-        new_position = torch.matmul(
-            loc_refine_pos[..., :2], rot_mat.swapaxes(-1, -2)
-        ) + origin[:, :2].unsqueeze(1)
-
-        new_v = (
-            new_position[:, 1:] - new_position[:, :-1]
-        )[:] / 0.1
-        new_v = torch.cat([torch.zeros(new_v.size(0), 1, 2).cuda(), new_v], dim=1)
-        new_v[:,0,:] = new_position[:,0] - data['agent']['position'][:,49,:2]\
-        
-
-        loc_refine_head = pred["loc_refine_head"][torch.arange(pred['loc_refine_pos'].size(0)),best_mode,:]
-        new_heading = torch.zeros_like(loc_refine_head)
-        new_heading[:] = wrap_angle(loc_refine_head+theta.unsqueeze(-1).unsqueeze(-1))[:]
-
-        new_a = (
-            new_v[:, 1:] - new_v[:, :-1]
-        )[:] / 0.1
-        new_a = torch.cat([torch.zeros(new_a.size(0), 1, 2).cuda(), new_a], dim=1)
-        new_a[:,0,:] = new_v[:,0] - data['agent']['velocity'][:,49,:2]
-
-        action_information = torch.cat([new_heading,new_a], dim=-1)
+        gt = torch.cat([data['agent']['target'][..., :2], data['agent']['target'][..., -1:]], dim=-1)
+        l2_norm = (torch.norm(pred['loc_refine_pos'][:-1,:,:, :2] -
+                              gt[..., :2].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
+        best_mode = l2_norm.argmin(dim=-1)
+        best_mode = torch.cat([best_mode,torch.tensor([0]).cuda()])
+        # best_mode = torch.randint(1,size=(data['agent']['num_nodes'],))
+        loc_refine_pos = pred['loc_refine_pos'][torch.arange(pred['loc_refine_pos'].size(0)), best_mode,:2]
+        loc_refine_head = pred["loc_refine_head"][torch.arange(pred['loc_refine_pos'].size(0)),best_mode,0]
+        action_information = torch.cat([loc_refine_pos[agent_index,:offset,:2],loc_refine_head[agent_index,:offset,0].unsqueeze(-1)], dim=-1)
         
         mean = torch.tanh(self.f(action_information[agent_index]))
-        std = F.softplus(self.f(action_information[agent_index])) + 1e-8
-        action_dist = Normal(mean, std)
-        return action_dist
+        var = F.softplus(self.f(action_information[agent_index])) + 1e-8
+        return mean, var
     
 class ValueNet(nn.Module):
-    def __init__(self, hidden_dim, state_dim):
+    def __init__(self, hidden_dim):
         super(ValueNet, self).__init__()
         self.fc = nn.Sequential(
-            layer_init(nn.Linear(state_dim, hidden_dim)),
             layer_init(nn.Linear(hidden_dim, hidden_dim*2)),
-            layer_init(nn.Linear(hidden_dim*2, hidden_dim*2)),
+            nn.ReLU(),
+            layer_init(nn.Linear(hidden_dim*2, hidden_dim*4)),
+            nn.ReLU(),
+            layer_init(nn.Linear(hidden_dim*4, hidden_dim*2)),
             nn.ReLU(),
             layer_init(nn.Linear(hidden_dim*2, hidden_dim//2)),
             nn.ReLU(),
@@ -87,55 +62,11 @@ class ValueNet(nn.Module):
         )
         self.hidden_dim = hidden_dim
 
-    def forward(self, encoder, decoder, states, data, agent_index, flag, offset):
+    def forward(self, encoder, states, agent_index):
 
-        if flag==1:
-            temp = torch.zeros_like(data['agent']['position'])
-            temp[:,:50,:2] = data['agent']['position'][:,offset:50+offset,:2]
-            temp[:,50:,:2] = states[:,:2]
-            data['agent']['position'][:,:,2] = temp[:,:,2]
-            
-            temp = torch.zeros_like(data['agent']['velocity'])
-            temp[:,:50,:2] = data['agent']['velocity'][:,offset:50+offset,:2]
-            temp[:,50:,:2] = states[:,2:]
-            data['agent']['velocity'][:,:,2] = temp[:,:,2]
-        else:
-            data['agent']['position'][agent_index,50:,:2]=states[:,:2]
-            data['agent']['velocity'][agent_index,50:,:2]=states[:,2:]
-
-        pred = decoder(data, encoder(data))
-        origin = data["agent"]["position"][:, 50 - 1]
-        theta = data["agent"]["heading"][:, 50 - 1]
-        cos, sin = theta.cos(), theta.sin()
-        rot_mat = theta.new_zeros(data['agent']['num_nodes'], 2, 2)
-        rot_mat[:, 0, 0] = cos
-        rot_mat[:, 0, 1] = -sin
-        rot_mat[:, 1, 0] = sin
-        rot_mat[:, 1, 1] = cos
-            
-        reg_mask = data['agent']['predict_mask'][:, 50:]
-
-        # gt = torch.cat([data['agent']['target'][..., :2], data['agent']['target'][..., -1:]], dim=-1)
-        # l2_norm = (torch.norm(pred['loc_refine_pos'][..., :2] -
-        #                       gt[..., :2].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        # best_mode = l2_norm.argmin(dim=-1)
-        best_mode = torch.randint(1,size=(data['agent']['num_nodes'],))
-        loc_refine_pos = pred['loc_refine_pos'][torch.arange(pred['loc_refine_pos'].size(0)), best_mode]
-
-        new_position = torch.matmul(
-            loc_refine_pos[..., :2], rot_mat.swapaxes(-1, -2)
-        ) + origin[:, :2].unsqueeze(1)
-
-        new_v = (
-            new_position[:, 1:] - new_position[:, :-1]
-        )[:] / 0.1
-        new_v = torch.cat([torch.zeros(new_v.size(0), 1, 2).cuda(), new_v], dim=1)
-        new_v[:,0,:] = new_position[:,0] - data['agent']['position'][:,49,:2]
-
-        state_information = torch.cat([new_position,new_v],dim=-1)
-
+        state_information = encoder(states)
+        state_information = state_information['x_a'].reshape(-1, 50, self.hidden_dim)
         v = self.fc(state_information[agent_index])
-        
         return v
     
 class PPO:
@@ -171,7 +102,6 @@ class PPO:
         self.agent_num = agent_num
         self.encoder = encoder
         self.decoder = decoder
-        self.data = data
         self.agent_index = agent_index
         self.offset = offset
         self.entropy_coef = entropy_coef
@@ -181,6 +111,14 @@ class PPO:
                         {'params': self.pi.parameters(), 'lr': self.actor_lr},
                         {'params': self.value.parameters(), 'lr': self.critic_lr}
                     ])
+
+    def choose_action(self, model, state, data, offset):
+        with torch.no_grad():
+            mean, var = self.old_pi(model, state, data, offset)
+            dis = Normal(mean, var)
+            a = dis.sample()
+        return a
+
     
     def update(self, transition, agent_index):
         states = torch.cat(transition[agent_index]['states'], dim=0).to(self.device)
@@ -188,6 +126,8 @@ class PPO:
         next_states = torch.cat(transition[agent_index]['next_states'],dim=0).to(self.device)  
         dones = torch.tensor(transition[agent_index]['dones'], dtype=torch.float).view(-1,1).to(self.device)  
         rewards = torch.tensor(transition[agent_index]['rewards'], dtype=torch.float).view(-1,1).to(self.device)
+
+        print(states.shape)
 
         for epoch in range(self.epochs):
  
@@ -232,12 +172,5 @@ class PPO:
             self.optimizer.zero_grad()
             total_loss.mean().requires_grad_(True).backward()
             self.optimizer.step()
-
-            # if self.batch_id % 10 == 0:
-            #     wandb.log({
-            #             "game": self.batch_id+1,
-            #             f"Epoch_{epoch}_Reward": total_loss,
-            #             "group": f"Game_{self.batch_id+1}"
-            #     })
 
         self.old_pi.load_state_dict(self.pi.state_dict())
