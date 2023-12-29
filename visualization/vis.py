@@ -15,6 +15,7 @@ from av2.datasets.motion_forecasting.data_schema import (
     ObjectType,
     TrackCategory,
 )
+from datetime import datetime
 from utils.utils import get_auto_pred, get_transform_mat
 
 
@@ -464,3 +465,7 @@ def vis_reward(data,cumulative_reward,agent_index,episodes):
     plt.xlabel("Episodes")
     plt.ylabel("Reward")
     plt.legend()
+
+    current_time = datetime.now()
+    timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+    plt.savefig(f'~/Multi-agent-competitive-environment/figures/reward_{timestamp}.png')

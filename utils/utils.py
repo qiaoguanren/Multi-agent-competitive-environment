@@ -1,4 +1,5 @@
 import torch, copy, math
+import numpy as np
 from utils.geometry import wrap_angle
 from shapely.geometry import Point, LineString
 from shapely.ops import nearest_points
@@ -143,7 +144,45 @@ def get_auto_pred(input_data, model, loc_refine_pos, loc_refine_head, offset, an
         None if anchor is None else (anchor_auto_traj_propose, anchor_auto_traj_refine)
     )
 
-def add_new_agent(data,new_position,new_heading,new_velocity):
+def add_new_agent(data):
+    acceleration = 1.5
+    arr_s_x = np.array([])
+    arr_s_y = np.array([])
+    arr_v_x = np.array([])
+    arr_v_y = np.array([])
+    v0_x = 5*math.cos(data['agent']['heading'][data['agent']['category']==3][0,50])
+    v0_y = 5
+    t = 0.1
+    x0 = x = 5258.5
+    y0 = y = 320.6
+    v_x = 0
+    v_y = 0
+    new_heading=torch.empty_like(data['agent']['heading'][0])
+    new_heading[:]=1.9338
+
+    for i in range(80):
+        a_x = acceleration*math.cos(new_heading[i+30])
+        x = x + v0_x*t + 0.5*acceleration*(t**2)
+        v0_x = v0_x + a_x*t
+        v_x = v0_x
+        arr_s_x = np.append(arr_s_x,x)
+        arr_v_x = np.append(arr_v_x,v_x)
+
+        a_y = math.sqrt(acceleration**2-a_x**2)
+        y = y + v0_y*t + 0.5*acceleration*(t**2)
+        v0_y = v0_y + a_y*t
+        v_y = v0_y
+        arr_s_y = np.append(arr_s_y,y)
+        arr_v_y = np.append(arr_v_y,v_y)
+
+    new_position=torch.empty_like(data['agent']['position'][0])
+    new_position[:,0]=torch.tensor(np.concatenate([np.ones(30)*x0,arr_s_x]))
+    new_position[:,1]=torch.tensor(np.concatenate([np.ones(30)*y0,arr_s_y]))
+
+    new_velocity=torch.empty_like(data['agent']['velocity'][0])
+    new_velocity[:,0]=torch.tensor(np.concatenate([np.ones(30)*0,arr_v_x]))
+    new_velocity[:,1]=torch.tensor(np.concatenate([np.ones(30)*0,arr_v_y]))
+
     data=data.clone()
     data['agent']['num_nodes']+=1   #num_nodes
     #av_index
