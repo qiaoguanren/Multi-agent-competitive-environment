@@ -21,4 +21,5 @@ from utils.graph import complete_graph
 from utils.graph import merge_edges
 from utils.graph import unbatch
 from utils.list import safe_list_index
+from utils.utils import get_transform_mat, get_auto_pred
 from utils.weight_init import weight_init

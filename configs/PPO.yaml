@@ -5,4 +5,4 @@ lamda: 0.97
 eps: 0.2
 hidden_dim: 128
 entropy_coef: 0.005
-epochs: 10
+epochs: 100
