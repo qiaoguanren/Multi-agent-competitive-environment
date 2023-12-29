@@ -63,15 +63,6 @@ trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices)
 it = iter(dataloader)
 data = next(it)
 
-scenario_id = data["scenario_id"][0]
-argoverse_scenario_dir = Path("/home/guanren/Multi-agent-competitive-environment/datasets/val/raw")
-all_scenario_files = sorted(argoverse_scenario_dir.rglob(f"*_{scenario_id}.parquet"))
-scenario_file_list = list(all_scenario_files)
-scenario_path = scenario_file_list[0]
-static_map_path = scenario_path.parents[0] / f"log_map_archive_{scenario_id}.json"
-scenario = scenario_serialization.load_argoverse_scenario_parquet(scenario_path)
-scenario_static_map = ArgoverseStaticMap.from_json(static_map_path)
-
 for param in model.encoder.parameters():
         param.requires_grad = False
 for param in model.decoder.parameters():
