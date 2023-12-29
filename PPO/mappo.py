@@ -1,12 +1,13 @@
 import torch
+import math
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
 import numpy as np
-from utils import wrap_angle
+from tqdm import tqdm
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+def layer_init(layer, std=0, bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
         torch.nn.init.constant_(layer.bias, bias_const)
         return layer
@@ -23,12 +24,10 @@ class Policy(nn.Module):
         )
         self.hidden_dim = hidden_dim
     
-    def forward(self, model, states, action, data, agent_index,offset):
-        data['agent']['position'][agent_index,:50,:2]=states[:,:2]
-        data['agent']['velocity'][agent_index,:50,:2]=states[:,2:4]
-        data['agent']['heading'][agent_index,:50,:2]=states[:,-1]
+    def forward(self, encoder, decoder, data, agent_index, offset):
 
-        pred = model(data)
+        states = encoder(data)
+        pred = decoder(data, states)
             
         reg_mask = data['agent']['predict_mask'][:-1, 50:]
 
@@ -37,13 +36,13 @@ class Policy(nn.Module):
                               gt[..., :2].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
         best_mode = l2_norm.argmin(dim=-1)
         best_mode = torch.cat([best_mode,torch.tensor([0]).cuda()])
-        # best_mode = torch.randint(1,size=(data['agent']['num_nodes'],))
-        loc_refine_pos = pred['loc_refine_pos'][torch.arange(pred['loc_refine_pos'].size(0)), best_mode,:2]
-        loc_refine_head = pred["loc_refine_head"][torch.arange(pred['loc_refine_pos'].size(0)),best_mode,0]
-        action_information = torch.cat([loc_refine_pos[agent_index,:offset,:2],loc_refine_head[agent_index,:offset,0].unsqueeze(-1)], dim=-1)
+        loc_refine_pos = pred['loc_refine_pos'][torch.arange(pred['loc_refine_pos'].size(0)), best_mode,:,:2]
+        loc_refine_head = pred["loc_refine_head"][torch.arange(pred['loc_refine_pos'].size(0)),best_mode,:,0]
+        action_information = torch.cat([loc_refine_pos[agent_index,:,:2],loc_refine_head[agent_index,:].unsqueeze(-1)], dim=-1)
         
-        mean = torch.tanh(self.f(action_information[agent_index]))
-        var = F.softplus(self.f(action_information[agent_index])) + 1e-8
+        mean = self.f(action_information)
+        mean = torch.cat([mean[:,:2],(torch.tanh(mean[:,-1].clone().detach().requires_grad_(True))*torch.tensor([math.pi]).cuda()).unsqueeze(-1)],dim=-1)
+        var = F.softplus(self.f(action_information)) + 1e-8
         return mean, var
     
 class ValueNet(nn.Module):
@@ -52,29 +51,26 @@ class ValueNet(nn.Module):
         self.fc = nn.Sequential(
             layer_init(nn.Linear(hidden_dim, hidden_dim*2)),
             nn.ReLU(),
-            layer_init(nn.Linear(hidden_dim*2, hidden_dim*4)),
+            layer_init(nn.Linear(hidden_dim*2, hidden_dim)),
             nn.ReLU(),
-            layer_init(nn.Linear(hidden_dim*4, hidden_dim*2)),
+            layer_init(nn.Linear(hidden_dim, hidden_dim//2)),
             nn.ReLU(),
-            layer_init(nn.Linear(hidden_dim*2, hidden_dim//2)),
+            layer_init(nn.Linear(hidden_dim//2, hidden_dim//4)),
             nn.ReLU(),
-            layer_init(nn.Linear(hidden_dim//2, 1)),
+            layer_init(nn.Linear(hidden_dim//4, 1)),
         )
         self.hidden_dim = hidden_dim
 
-    def forward(self, encoder, states, agent_index):
+    def forward(self, states, agent_index):
 
-        state_information = encoder(states)
-        state_information = state_information['x_a'].reshape(-1, 50, self.hidden_dim)
-        v = self.fc(state_information[agent_index])
+        v = self.fc(states)
         return v
     
 class PPO:
     def __init__(self, 
                  batch_id,
                  encoder, 
-                 decoder, 
-                 data, 
+                 decoder,  
                  agent_index: int, 
                  hidden_dim: int,
                  action_dim: int,
@@ -91,7 +87,7 @@ class PPO:
                  epochs: int):
         self.pi = Policy(hidden_dim, action_dim).to(device)
         self.old_pi = Policy(hidden_dim, action_dim).to(device)
-        self.value = ValueNet(hidden_dim, state_dim).to(device)
+        self.value = ValueNet(hidden_dim).to(device)
         self.batch_id = batch_id 
         self.actor_lr = actor_learning_rate
         self.critic_lr = critic_learning_rate
@@ -112,65 +108,74 @@ class PPO:
                         {'params': self.value.parameters(), 'lr': self.critic_lr}
                     ])
 
-    def choose_action(self, model, state, data, offset):
+    def choose_action(self, encoder, decoder, data, agent_index, offset):
         with torch.no_grad():
-            mean, var = self.old_pi(model, state, data, offset)
+            mean, var = self.old_pi(encoder, decoder, data, agent_index, offset)
             dis = Normal(mean, var)
             a = dis.sample()
         return a
 
     
-    def update(self, transition, agent_index):
-        states = torch.cat(transition[agent_index]['states'], dim=0).to(self.device)
+    def update(self, transition, data, agent_index):
+        states = transition[agent_index]['states'][0]['x_a'][agent_index,:,:]
+        for i in range(1,len(transition[agent_index]['states'])):
+            states = torch.cat([states,transition[agent_index]['states'][i]['x_a'][agent_index,:,:]],dim=0)
         actions = torch.cat(transition[agent_index]['actions'],dim=0).to(self.device)  
-        next_states = torch.cat(transition[agent_index]['next_states'],dim=0).to(self.device)  
+        next_states = transition[agent_index]['next_states'][0]['x_a'][agent_index,:,:]
+        for i in range(1,len(transition[agent_index]['next_states'])):
+            next_states = torch.cat([next_states,transition[agent_index]['next_states'][i]['x_a'][agent_index,:,:]],dim=0)  
         dones = torch.tensor(transition[agent_index]['dones'], dtype=torch.float).view(-1,1).to(self.device)  
         rewards = torch.tensor(transition[agent_index]['rewards'], dtype=torch.float).view(-1,1).to(self.device)
 
-        print(states.shape)
-
-        for epoch in range(self.epochs):
+        for epoch in tqdm(range(self.epochs)):
  
-            # td_error
-            next_state_value = self.value(self.encoder, self.decoder, next_states, self.data, self.agent_index, 1, self.offset)
-            td_target = rewards + self.gamma * next_state_value.view(-1,self.offset) * (1-dones)
-            td_value = self.value(self.encoder, self.decoder, states, self.data, self.agent_index, 0, self.offset)
-            td_delta = td_value.view(-1,self.offset) - td_target
+            with torch.no_grad():
+                # td_error
+                next_state_value = self.value(next_states, self.agent_index)
+                td_target = rewards + self.gamma * next_state_value.view(int(60/self.offset),-1) * (1-dones)
+                td_value = self.value(states, self.agent_index)
+                td_delta = td_value.view(int(60/self.offset),-1) - td_target
 
-            td_target = td_target.view(-1,1)
-            td_delta = td_delta.view(-1,1)
-    
-            # calculate GAE
-            advantage = 0
-            advantage_list = []
-            td_delta = td_delta.cpu().detach().numpy()
-            for delta in td_delta[::-1]:
-                with torch.no_grad():
+                td_delta = td_delta.view(60,-1)
+        
+                # calculate GAE
+                advantage = 0
+                advantage_list = []
+                td_delta = td_delta.cpu().detach().numpy()
+                for delta in td_delta[::-1]:
                     advantage = self.gamma * self.lamda * advantage + delta
-                advantage_list.append(advantage)
-            advantage_list.reverse()
-            advantage = torch.from_numpy(np.array(advantage_list, dtype=np.float32)).to(self.device)
-            advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-    
-            # get ratio
-            old_dis = self.old_pi(self.encoder, self.decoder, states, self.data, self.agent_index)
-            old_log_probs = old_dis.log_prob(actions)
-            dis = self.pi(self.encoder, self.decoder, states, self.data, self.agent_index)
-            log_probs = dis.log_prob(actions)
+                    advantage_list.append(advantage)
+                advantage_list.reverse()
+                advantage = torch.from_numpy(np.array(advantage_list, dtype=np.float32)).to(self.device)
+                advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
+        
+                # get ratio
+                mean, var = self.old_pi(self.encoder, self.decoder, data, self.agent_index, self.offset)
+                old_policy = Normal(mean, var)
+                old_log_probs = old_policy.log_prob(actions)
+
+            mean, var = self.pi(self.encoder, self.decoder, data, self.agent_index, self.offset)
+            new_policy = Normal(mean, var)
+            log_probs = new_policy.log_prob(actions)
             ratio = torch.exp(log_probs - old_log_probs)
     
             # clipping
+            advantage = advantage.unsqueeze(1)
+            advantage = advantage.repeat(1, 3, 1)
+            ratio = ratio.unsqueeze(-1)
+            ratio = ratio.repeat(1, 1, 10)
             surr1 = advantage * ratio
             surr2 = advantage * torch.clamp(ratio, 1-self.eps, 1+self.eps)
             
             # pi and value loss
             pi_loss = torch.mean(-torch.min(surr1, surr2))
-            value_loss = torch.mean(F.mse_loss(td_value, td_target.detach()))
+            value_loss = torch.mean(F.mse_loss(self.value(states, self.agent_index), td_target.reshape(-1,1).detach()))
 
-            total_loss = (pi_loss + value_loss - dis.entropy() * self.entropy_coef)
+            total_loss = (pi_loss + value_loss - new_policy.entropy() * self.entropy_coef)
             
             self.optimizer.zero_grad()
             total_loss.mean().requires_grad_(True).backward()
             self.optimizer.step()
 
-        self.old_pi.load_state_dict(self.pi.state_dict())
+            if epoch % 10 == 0:
+                self.old_pi.load_state_dict(self.pi.state_dict())

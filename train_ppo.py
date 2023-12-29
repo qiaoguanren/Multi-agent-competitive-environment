@@ -24,6 +24,7 @@ from visualization.vis import vis_reward, generate_video
 from utils.geometry import wrap_angle
 from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function
 from torch_geometric.data import Batch
+from tqdm import tqdm
 
 pl.seed_everything(2023, workers=True)
 
@@ -81,7 +82,7 @@ with open("configs/PPO.yaml", "r") as file:
         config = yaml.safe_load(file)
 file.close()
 
-for episode in range(episodes):
+for episode in tqdm(range(episodes)):
     offset=5
     new_data=new_input_data.cuda().clone()
 
@@ -102,7 +103,7 @@ for episode in range(episodes):
                                 pred['scale_refine_pos'][..., :model.output_dim]], dim=-1)
 
     auto_pred=pred
-    origin,theta,rot_mat=get_transform_mat(new_data)
+    origin,theta,rot_mat=get_transform_mat(new_data,model)
     new_true_trans_position_refine = torch.einsum(
         "bijk,bkn->bijn",
         pred["loc_refine_pos"][..., : model.output_dim],
@@ -137,57 +138,36 @@ for episode in range(episodes):
             epochs = config['epochs']
     )
 
-    state = new_data['agent']['position'][agent_index, :, :model.output_dim]
-    state = torch.cat([state, new_data['agent']['velocity'][agent_index, :, :model.output_dim]], dim = -1)
-    state = torch.cat([state, new_data['agent']['heading'][agent_index, :, 0]], dim = -1)
+    state = model.encoder(new_data)
 
     for timestep in range(0,model.num_future_steps,offset):
 
         true_trans_position_refine=new_true_trans_position_refine
-        reg_mask = new_data['agent']['predict_mask'][:-1, model.num_historical_steps:]
-        cls_mask = new_data['agent']['predict_mask'][:, -1]
-        origin,theta,rot_mat=get_transform_mat(new_data)
+        reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
+        init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
         
-        action = torch.cat([pred['loc_refine_pos'][agent_index,:, :offset, :model.output_dim],pred['loc_refine_head'][agent_index,:, :offset, 0].unsqueeze(-1)])
-        best_action = agent.choose_action(state,action,new_data)
+        sample_action = agent.choose_action(model.encoder, model.decoder,new_data,agent_index,offset)
 
-        gt = torch.cat([data['agent']['target'][..., :model.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        l2_norm = (torch.norm(traj_propose[:-1,:,:offset, :model.output_dim] -
-                            gt[..., :model.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask[...,:offset].unsqueeze(1)).sum(dim=-1)
-        best_mode = l2_norm.argmin(dim=-1)
-        best_mode = torch.cat([best_mode,torch.tensor([0]).cuda()])
+        best_mode = torch.randint(6,size=(new_data['agent']['num_nodes'],))
+        l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
+                              sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[:offset].unsqueeze(0)).sum(dim=-1)
+        action_suggest_index=l2_norm.argmin(dim=-1)
+        best_mode[agent_index] = action_suggest_index
 
-        action[best_mode[agent_index].item()] = best_action
-
-        new_position = torch.matmul(
-            best_action[:, :2], rot_mat.swapaxes(-1, -2)
+        new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
+            new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
         )
-        new_heading =  wrap_angle(best_action[:, -1]+theta.unsqueeze(-1))
 
-        next_state = torch.zeros_like(state)
-        next_state[:model.num_historical_steps-offset] = state[offset:model.num_historical_steps]
-        next_state[model.num_historical_steps-offset,-1] = state[model.num_historical_steps-1,-1] + new_heading[0,-1]
-        next_state[model.num_historical_steps-offset,:2] = state[model.num_historical_steps-1,:2] + new_position[0,:2]
-        next_state[model.num_historical_steps-offset,2:4] = (next_state[model.num_historical_steps-offset,:2] - state[model.num_historical_steps-1,:2])/0.1
-        for i in range(1,offset):
-            next_state[model.num_historical_steps-offset+i,-1] = next_state[model.num_historical_steps-offset+i-1,-1] + action[i,-1]
-            next_state[model.num_historical_steps-offset+i,:2] = next_state[model.num_historical_steps-offset+i-1,:2] + new_position[i,:2]
-            next_state[model.num_historical_steps-offset+i,2:4] = (next_state[model.num_historical_steps-offset+i,:2] - next_state[i-1,:2])/0.1
-
+        next_state = model.encoder(new_data)
         transition_list[agent_index]['states'].append(state)
-        transition_list[agent_index]['actions'].append(action)
+        transition_list[agent_index]['actions'].append(sample_action[:offset,:])
         transition_list[agent_index]['next_states'].append(next_state)
         transition_list[agent_index]['dones'].append(False)
         reward = reward_function(new_data, model, agent_index)
         transition_list[agent_index]['rewards'].append(reward)
-
         state = next_state
-
-        new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
-            new_data, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset
-        )
             
-    agent.update(transition_list,agent_index)
+    agent.update(transition_list,new_input_data, agent_index)
 
     _return = 0
     for t in reversed(range(0, int(model.num_future_steps/offset))):
