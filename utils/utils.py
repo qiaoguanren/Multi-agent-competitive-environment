@@ -145,7 +145,7 @@ def get_auto_pred(input_data, model, loc_refine_pos, loc_refine_head, offset, an
     )
 
 def add_new_agent(data):
-    acceleration = 1.5
+    acceleration = 0.8
     arr_s_x = np.array([])
     arr_s_y = np.array([])
     arr_v_x = np.array([])
