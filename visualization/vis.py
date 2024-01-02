@@ -423,11 +423,15 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                           new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0], offset,anchor=(init_origin,init_theta,init_rot_mat)
                       )
                       plot_traj_with_data(new_data,scenario_static_map,bounds=30,t=50-offset)
+                      for j in range(6):
+                          xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                          plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                   else:
                       plot_traj_with_data(new_data,scenario_static_map,bounds=30,t=50-offset+i%offset)
-                  for j in range(6):
-                      xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                      plt.plot(xy[j, ..., 0], xy[j, ..., 1])
+                      for j in range(6):
+                          xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                          plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
+                  
 
               plt.title(f"timestep={i}")
               buf = io.BytesIO()
@@ -443,7 +447,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
         video.write(cv2.cvtColor(np.array(frame_temp), cv2.COLOR_RGB2BGR))
     video.release()
 
-def vis_reward(data,cumulative_reward,agent_index,episodes):
+def vis_reward(data,cumulative_reward,agent_index,episodes,version_path):
     # true_traj_refine[-1][0]
     window_size = 5
     moving_avg_rewards = [[] for _ in range(data['agent']['num_nodes'])]
@@ -468,4 +472,5 @@ def vis_reward(data,cumulative_reward,agent_index,episodes):
 
     current_time = datetime.now()
     timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-    plt.savefig(f'~/Multi-agent-competitive-environment/figures/reward_{timestamp}.png')
+    full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'reward_{timestamp}.png'
+    plt.savefig(full_path)
