@@ -194,51 +194,62 @@ def add_new_agent(data):
     data['agent']['position']=torch.cat([data['agent']['position'],new_position[None,:]]) #position
     data['agent']['heading']=torch.cat([data['agent']['heading'],new_heading[None,:]]) #heading
     data['agent']['velocity']=torch.cat([data['agent']['velocity'],new_velocity[None,:]]) #velocity
-    #target
+    #target'
     data['agent']['batch']=torch.cat([data['agent']['batch'],torch.tensor([0])]) #batch
     data['agent']['ptr'][1]+=1    #ptr
     return data
 
-def reward_function(data,model,agent_index):
+def reward_function(data,new_data,model,agent_index,timestep):
                 
         reward1 = reward2 = reward3 = 0
+        gt = data['agent']['position'][agent_index, model.num_historical_steps+model.num_future_steps-1:model.num_historical_steps+model.num_future_steps, :model.output_dim]
+        current_position = new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
+        pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-5:model.num_historical_steps-4, :model.output_dim]
 
-        pre_v = data['agent']['velocity'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
-        next_v = data['agent']['velocity'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
+        delta_distance = gt-current_position
+        l2_norm_current_distance = torch.norm(gt - current_position, p=2, dim=-1)
+        l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
+        if delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance<l2_norm_pre_distance:
+            reward1 = 50/60*(timestep+5)
+        elif delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance>=l2_norm_pre_distance:
+            reward1 = -50
+        elif delta_distance[0,0]>=0 and delta_distance[0,1]<=0:
+            reward1 = 100
+        # pre_v = data['agent']['velocity'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
+        # next_v = data['agent']['velocity'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
+        # pre_v = math.sqrt(pre_v[0,0]**2+pre_v[0,1]**2)
+        # next_v = math.sqrt(next_v[0,0]**2+next_v[0,1]**2)
+        # speed_reward = (next_v - pre_v) * 10
+        # if next_v > pre_v:
+        #      reward1 = 100 + speed_reward
+        # else:
+        #      reward1 = -50
 
-        pre_v = math.sqrt(pre_v[0,0]**2+pre_v[0,1]**2)
-        next_v = math.sqrt(next_v[0,0]**2+next_v[0,1]**2)
-        
-        if next_v > pre_v:
-             reward1 = 50
-        else:
-             reward1 = -100
-
-        for i in range(data['agent']['num_nodes']):
-            if i==agent_index:
-                continue
-            distance = torch.norm(data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],dim=-1)
-            if distance < 1e-1:
-                 break
-        if distance < 1e-1:
-            reward2 = -100
-        left_bound = []
-        right_bound = []
-        for i in range(len(data['map_point']['side'])):
-            if data['map_point']['side'][i] == 0:
-                left_bound.append(tuple(data['map_point']['position'][i,:2]))
-            if data['map_point']['side'][i] == 1:
-                right_bound.append(tuple(data['map_point']['position'][i,:2]))
-        left_polygon = LineString(left_bound)
-        right_polygon = LineString(right_bound)
-        car_point = Point(tuple(data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim].flatten().cpu().numpy()))
-        nearest_left = nearest_points(left_polygon, car_point)[0]
-        nearest_right = nearest_points(right_polygon, car_point)[0]
-        distance_to_nearest_left = car_point.distance(nearest_left)
-        distance_to_nearest_right = car_point.distance(nearest_right)
-        lane_width = nearest_left.distance(nearest_right)
-        if distance_to_nearest_left + distance_to_nearest_right > lane_width:
-            reward3 = -50
+        # for i in range(data['agent']['num_nodes']):
+        #     if i==agent_index:
+        #         continue
+        #     distance = torch.norm(data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],dim=-1)
+        #     if distance < 1e-1:
+        #          break
+        # if distance < 1e-1:
+        #     reward2 = -100
+        # left_bound = []
+        # right_bound = []
+        # for i in range(len(data['map_point']['side'])):
+        #     if data['map_point']['side'][i] == 0:
+        #         left_bound.append(tuple(data['map_point']['position'][i,:2]))
+        #     if data['map_point']['side'][i] == 1:
+        #         right_bound.append(tuple(data['map_point']['position'][i,:2]))
+        # left_polygon = LineString(left_bound)
+        # right_polygon = LineString(right_bound)
+        # car_point = Point(tuple(data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim].flatten().cpu().numpy()))
+        # nearest_left = nearest_points(left_polygon, car_point)[0]
+        # nearest_right = nearest_points(right_polygon, car_point)[0]
+        # distance_to_nearest_left = car_point.distance(nearest_left)
+        # distance_to_nearest_right = car_point.distance(nearest_right)
+        # lane_width = nearest_left.distance(nearest_right)
+        # if distance_to_nearest_left + distance_to_nearest_right > lane_width:
+        #     reward3 = -50
 
         # total_reward = np.array([reward1, reward2, reward3])
         # mean_reward = np.mean(total_reward)

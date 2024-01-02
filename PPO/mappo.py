@@ -1,5 +1,5 @@
 import torch
-import math
+import math, random
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
@@ -24,10 +24,9 @@ class Policy(nn.Module):
         )
         self.hidden_dim = hidden_dim
     
-    def forward(self, encoder, decoder, data, agent_index, offset):
+    def forward(self, state, decoder, data, agent_index, offset):
 
-        states = encoder(data)
-        pred = decoder(data, states)
+        pred = decoder(data, state)
             
         reg_mask = data['agent']['predict_mask'][:-1, 50:]
 
@@ -38,7 +37,7 @@ class Policy(nn.Module):
         best_mode = torch.cat([best_mode,torch.tensor([0]).cuda()])
         loc_refine_pos = pred['loc_refine_pos'][torch.arange(pred['loc_refine_pos'].size(0)), best_mode,:,:2]
         loc_refine_head = pred["loc_refine_head"][torch.arange(pred['loc_refine_pos'].size(0)),best_mode,:,0]
-        action_information = torch.cat([loc_refine_pos[agent_index,:,:2],loc_refine_head[agent_index,:].unsqueeze(-1)], dim=-1)
+        action_information = torch.cat([loc_refine_pos[agent_index,:offset,:2],loc_refine_head[agent_index,:offset].unsqueeze(-1)], dim=-1)
         
         mean = self.f(action_information)
         mean = torch.cat([mean[:,:2],(torch.tanh(mean[:,-1].clone().detach().requires_grad_(True))*torch.tensor([math.pi]).cuda()).unsqueeze(-1)],dim=-1)
@@ -107,36 +106,42 @@ class PPO:
                         {'params': self.pi.parameters(), 'lr': self.actor_lr},
                         {'params': self.value.parameters(), 'lr': self.critic_lr}
                     ])
+        
+    def sample(self, transition, agent_index):
+        length = len(transition[agent_index]['states'])
+        random_index = random.randint(0, length-1)
+        data = transition[agent_index]['datas'][random_index]
+        s = transition[agent_index]['states'][random_index]
+        a = transition[agent_index]['actions'][random_index]
+        r = transition[agent_index]['rewards'][random_index]
+        s_next = transition[agent_index]['next_states'][random_index]
+        done = transition[agent_index]['dones'][random_index]
+        return data, s, a, r, s_next, done
 
-    def choose_action(self, encoder, decoder, data, agent_index, offset):
+    def choose_action(self, state, decoder, data, agent_index, offset):
         with torch.no_grad():
-            mean, var = self.old_pi(encoder, decoder, data, agent_index, offset)
+            mean, var = self.old_pi(state, decoder, data, agent_index, offset)
             dis = Normal(mean, var)
             a = dis.sample()
         return a
 
     
-    def update(self, transition, data, agent_index):
-        states = transition[agent_index]['states'][0]['x_a'][agent_index,:,:]
-        for i in range(1,len(transition[agent_index]['states'])):
-            states = torch.cat([states,transition[agent_index]['states'][i]['x_a'][agent_index,:,:]],dim=0)
-        actions = torch.cat(transition[agent_index]['actions'],dim=0).to(self.device)  
-        next_states = transition[agent_index]['next_states'][0]['x_a'][agent_index,:,:]
-        for i in range(1,len(transition[agent_index]['next_states'])):
-            next_states = torch.cat([next_states,transition[agent_index]['next_states'][i]['x_a'][agent_index,:,:]],dim=0)  
-        dones = torch.tensor(transition[agent_index]['dones'], dtype=torch.float).view(-1,1).to(self.device)  
-        rewards = torch.tensor(transition[agent_index]['rewards'], dtype=torch.float).view(-1,1).to(self.device)
-
+    def update(self, transition, agent_index):
+        
         for epoch in tqdm(range(self.epochs)):
+            data, states,  actions, rewards, next_states, dones = self.sample(transition, agent_index)
+            
+            critic_states = states['x_a']
+            critic_next_states = next_states['x_a']
  
             with torch.no_grad():
                 # td_error
-                next_state_value = self.value(next_states, self.agent_index)
-                td_target = rewards + self.gamma * next_state_value.view(int(60/self.offset),-1) * (1-dones)
-                td_value = self.value(states, self.agent_index)
-                td_delta = td_value.view(int(60/self.offset),-1) - td_target
+                next_state_value = self.value(critic_next_states, self.agent_index)
+                td_target = rewards + self.gamma * next_state_value * (1-dones)
+                td_value = self.value(critic_states, self.agent_index)
+                td_delta = td_value - td_target
 
-                td_delta = td_delta.view(60,-1)
+                # td_delta = td_delta.view(60,-1)
         
                 # calculate GAE
                 advantage = 0
@@ -150,28 +155,28 @@ class PPO:
                 advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
         
                 # get ratio
-                mean, var = self.old_pi(self.encoder, self.decoder, data, self.agent_index, self.offset)
+                mean, var = self.old_pi(states, self.decoder, data, self.agent_index, self.offset)
                 old_policy = Normal(mean, var)
                 old_log_probs = old_policy.log_prob(actions)
 
-            mean, var = self.pi(self.encoder, self.decoder, data, self.agent_index, self.offset)
+            mean, var = self.pi(states, self.decoder, data, self.agent_index, self.offset)
             new_policy = Normal(mean, var)
             log_probs = new_policy.log_prob(actions)
             ratio = torch.exp(log_probs - old_log_probs)
     
             # clipping
-            advantage = advantage.unsqueeze(1)
-            advantage = advantage.repeat(1, 3, 1)
-            ratio = ratio.unsqueeze(-1)
-            ratio = ratio.repeat(1, 1, 10)
+            advantage = advantage.view(-1,1)
+            ratio = ratio.unsqueeze(-1).repeat(1,1,100).view(-1,1)
+            # print(advantage.shape, ratio.shape)
             surr1 = advantage * ratio
             surr2 = advantage * torch.clamp(ratio, 1-self.eps, 1+self.eps)
             
             # pi and value loss
             pi_loss = torch.mean(-torch.min(surr1, surr2))
-            value_loss = torch.mean(F.mse_loss(self.value(states, self.agent_index), td_target.reshape(-1,1).detach()))
+            value_loss = torch.mean(F.mse_loss(self.value(critic_states, self.agent_index), td_target.detach()))
 
             total_loss = (pi_loss + value_loss - new_policy.entropy() * self.entropy_coef)
+            # total_loss = pi_loss + value_loss
             
             self.optimizer.zero_grad()
             total_loss.mean().requires_grad_(True).backward()

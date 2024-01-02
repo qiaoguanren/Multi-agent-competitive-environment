@@ -75,7 +75,7 @@ if isinstance(data, Batch):
 
 new_input_data=add_new_agent(data)
 
-episodes = 300
+episodes = 500
 cumulative_reward = [{'return': []} for _ in range(new_input_data['agent']['num_nodes'])]
 
 with open("configs/PPO.yaml", "r") as file:
@@ -110,7 +110,8 @@ for episode in tqdm(range(episodes)):
         rot_mat.swapaxes(-1, -2),
     ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
 
-    transition_list = [{'states': [],
+    transition_list = [{'datas': [],
+            'states': [],
             'actions': [],
             'next_states': [],
             'rewards': [],
@@ -146,9 +147,11 @@ for episode in tqdm(range(episodes)):
         reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
         init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
         
-        sample_action = agent.choose_action(model.encoder, model.decoder,new_data,agent_index,offset)
+        sample_action = agent.choose_action(state, model.decoder,new_data,agent_index,offset)
+        transition_list[agent_index]['datas'].append(new_data)
 
-        best_mode = torch.randint(6,size=(new_data['agent']['num_nodes'],))
+        best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
+        best_mode = torch.cat([best_mode, torch.tensor([0])],dim=-1)
         l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
                               sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[:offset].unsqueeze(0)).sum(dim=-1)
         action_suggest_index=l2_norm.argmin(dim=-1)
@@ -162,17 +165,33 @@ for episode in tqdm(range(episodes)):
         transition_list[agent_index]['states'].append(state)
         transition_list[agent_index]['actions'].append(sample_action[:offset,:])
         transition_list[agent_index]['next_states'].append(next_state)
-        transition_list[agent_index]['dones'].append(False)
-        reward = reward_function(new_data, model, agent_index)
+        if timestep == model.num_future_steps - offset:
+            transition_list[agent_index]['dones'].append(True)
+        else:
+            transition_list[agent_index]['dones'].append(False)
+        reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index, timestep)
         transition_list[agent_index]['rewards'].append(reward)
         state = next_state
             
-    agent.update(transition_list,new_input_data, agent_index)
+    agent.update(transition_list, agent_index)
 
     _return = 0
     for t in reversed(range(0, int(model.num_future_steps/offset))):
         _return = (config['gamma'] * _return) + float(transition_list[agent_index]['rewards'][t])
     cumulative_reward[agent_index]['return'].append(_return)
+
+max_epoch = 0
+base_path = 'figures/'
+if os.path.exists(base_path):
+    for folder in os.listdir(base_path):
+        if folder.startswith("version_"):
+            max_epoch+=1
+
+next_version_folder = f"version_{max_epoch + 1}/"
+next_version_path = os.path.join(base_path, next_version_folder)
+os.makedirs(next_version_path, exist_ok=True)
+
+vis_reward(new_data,cumulative_reward,agent_index,episodes,next_version_path)
 
 pi_state_dict = agent.pi.state_dict()
 old_pi_state_dict = agent.old_pi.state_dict()
@@ -182,5 +201,8 @@ model_state_dict = {
     'old_pi': old_pi_state_dict,
     'value': value_state_dict
 }
-torch.save(model_state_dict, f'~/Multi-agent-competitive-environment/checkpoints/PPO_episodes={episodes}.ckpt')
-vis_reward(new_data,cumulative_reward,agent_index,episodes)
+
+base_path = 'checkpoints/'
+next_version_path = os.path.join(base_path, next_version_folder)
+os.makedirs(next_version_path, exist_ok=True)
+torch.save(model_state_dict, next_version_path+f'PPO_episodes={episodes}.ckpt')
