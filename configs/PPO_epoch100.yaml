@@ -5,4 +5,7 @@ lamda: 0.97
 eps: 0.2
 hidden_dim: 128
 entropy_coef: 0.005
-epochs: 100
+epochs: 50
+buffer_batchsize: 32
+sample_batchsize: 64
+episodes: 100
