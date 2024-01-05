@@ -198,6 +198,9 @@ for episode in tqdm(range(config['episodes'])):
     cumulative_reward[agent_index].append(discounted_return)
     cumulative_reward[agent_index+1].append(undiscounted_return)
 
+vis_reward(new_data,cumulative_reward,agent_index,config['episodes'],next_version_path)
+# vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
+
 pi_state_dict = agent.pi.state_dict()
 old_pi_state_dict = agent.old_pi.state_dict()
 value_state_dict = agent.value.state_dict()
@@ -212,5 +215,3 @@ next_version_path = os.path.join(base_path, next_version_folder)
 os.makedirs(next_version_path, exist_ok=True)
 torch.save(model_state_dict, next_version_path+'PPO_episodes='+str(config['episodes'])+'_epochs='+str(config['epochs'])+'.ckpt')
 
-vis_reward(new_data,cumulative_reward,agent_index,episode,next_version_path)
-vis_reward(new_data,cumulative_reward,agent_index+1,episode,next_version_path)

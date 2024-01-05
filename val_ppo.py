@@ -27,6 +27,7 @@ from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_
 from torch_geometric.data import Batch
 from PIL import Image as img
 from tqdm import tqdm
+from datetime import datetime
 
 pl.seed_everything(2023, workers=True)
 
@@ -89,12 +90,14 @@ scenario_static_map = ArgoverseStaticMap.from_json(static_map_path)
 
 new_input_data=add_new_agent(data)
 
-vid_path = 'test_ppo.webm'
+current_time = datetime.now()
+timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+vid_path = f'videos/test_ppo_{timestamp}.webm'
 with open("configs/PPO_epoch100.yaml", "r") as file:
         config = yaml.safe_load(file)
 file.close()
 
-model_state_dict = torch.load('checkpoints/version_1/PPO_episodes=100_epochs=100.ckpt')
+model_state_dict = torch.load('checkpoints/version_2/PPO_episodes=100_epochs=100.ckpt')
 
 episodes = 10
 
@@ -158,7 +161,7 @@ with torch.no_grad():
                 rot_mat.swapaxes(-1, -2),
             ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
             frames = []
-            state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
+            state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
             for i in range(40,110):
                   if i<50:
                       if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
@@ -198,19 +201,19 @@ with torch.no_grad():
                               for j in range(6):
                                 xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                                 plt.plot(xy[j, ..., 0], xy[j, ..., 1])
-                      else:
-                          if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
-                              plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
-                              for j in range(6):
-                                xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                                plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
+                      # else:
+                      #     if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
+                      #         plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
+                      #         for j in range(6):
+                      #           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                      #           plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
 
-            buf = io.BytesIO()
-            plt.savefig(buf, format="png")
-            plt.close()
-            buf.seek(0)
-            frame = img.open(buf)
-            frames.append(frame)
+                  buf = io.BytesIO()
+                  plt.savefig(buf, format="png")
+                  plt.close()
+                  buf.seek(0)
+                  frame = img.open(buf)
+                  frames.append(frame)
         agent.update(transition_list, agent_index)
     fourcc = cv2.VideoWriter_fourcc(*"VP80")
     video = cv2.VideoWriter(vid_path, fourcc, fps=10, frameSize=frames[0].size)

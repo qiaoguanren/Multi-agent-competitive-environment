@@ -391,7 +391,7 @@ def plot_traj_with_data(data,scenario_static_map,t=50,bounds=80.0):
 def generate_video(new_input_data,scenario_static_map, model, vid_path):
     frames = []
     with torch.no_grad():
-          offset=5
+          offset=1
           new_data=new_input_data.cuda().clone()
           pred = model(new_data)
           traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],

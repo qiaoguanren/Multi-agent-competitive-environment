@@ -75,137 +75,14 @@ class AntoQCNet(QCNet):
                                       pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
             traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
                                      pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-
-
-        def get_auto_pred(data, loc_refine_pos, scale_refine_pos, offset):
-            origin = data["agent"]["position"][:, self.num_historical_steps - 1]
-            theta = data["agent"]["heading"][:, self.num_historical_steps - 1]
-            cos, sin = theta.cos(), theta.sin()
-            rot_mat = theta.new_zeros(data["agent"]["num_nodes"], 2, 2)
-            rot_mat[:, 0, 0] = cos
-            rot_mat[:, 0, 1] = -sin
-            rot_mat[:, 1, 0] = sin
-            rot_mat[:, 1, 1] = cos
-
-            # auto_index = data['agent']['valid_mask'][:,self.num_historical_steps]
-            data["agent"]["valid_mask"] = (
-                torch.cat(
-                    (
-                        data["agent"]["valid_mask"][..., offset:],
-                        torch.zeros(data["agent"]["valid_mask"].shape[:-1] + (5,)).cuda(),
-                    ),
-                    dim=-1,
-                )
-            ).bool()
-            data["agent"]["valid_mask"][:, 0] = False
-
-            new_position = torch.matmul(
-                loc_refine_pos[..., :2], rot_mat.swapaxes(-1, -2)
-            ) + origin[:, :2].unsqueeze(1)
-
-            input_position = torch.zeros_like(data["agent"]["position"])
-            input_position[:, :-offset] = data["agent"]["position"][:, offset:]
-            input_position[
-                :, self.num_historical_steps - offset : self.num_historical_steps, :2
-            ] = new_position[:, :offset]
-
-            input_heading = torch.zeros_like(data["agent"]["heading"])
-            input_heading[:, :-offset] = data["agent"]["heading"][:, offset:]
-            input_heading[
-                :, self.num_historical_steps - offset : self.num_historical_steps
-            ] = wrap_angle(scale_refine_pos[..., :offset, 1] + theta.unsqueeze(-1))
-
-            input_v = torch.zeros_like(data["agent"]["velocity"])
-            input_v[:, :-offset] = data["agent"]["velocity"][:, offset:]
-            input_v[:, self.num_historical_steps - offset : self.num_historical_steps, :2] = (
-                new_position[:, 1:] - new_position[:, :-1]
-            )[:, :offset] / 0.1
-
-            data["agent"]["position"] = input_position
-            data["agent"]["heading"] = input_heading
-            data["agent"]["velocity"] = input_v
-
-            auto_pred = self(data)
-
-            new_origin = data["agent"]["position"][:, self.num_historical_steps - 1]
-            new_theta = data["agent"]["heading"][:, self.num_historical_steps - 1]
-            new_cos, new_sin = new_theta.cos(), new_theta.sin()
-            new_rot_mat = new_theta.new_zeros(data["agent"]["num_nodes"], 2, 2)
-            new_rot_mat[:, 0, 0] = new_cos
-            new_rot_mat[:, 0, 1] = -new_sin
-            new_rot_mat[:, 1, 0] = new_sin
-            new_rot_mat[:, 1, 1] = new_cos
-
-            new_trans_position_propose = torch.einsum(
-                "bijk,bkn->bijn",
-                auto_pred["loc_propose_pos"][..., : self.output_dim],
-                new_rot_mat.swapaxes(-1, -2),
-            ) + new_origin[:, :2].unsqueeze(1).unsqueeze(1)
-            auto_pred["loc_propose_pos"][..., : self.output_dim] = torch.einsum(
-                "bijk,bkn->bijn",
-                new_trans_position_propose - origin[:, :2].unsqueeze(1).unsqueeze(1),
-                rot_mat,
-            )
-            auto_pred["scale_propose_pos"][..., self.output_dim - 1] = wrap_angle(
-                auto_pred["scale_propose_pos"][..., self.output_dim - 1]
-                + new_theta.unsqueeze(-1).unsqueeze(-1)
-                - theta.unsqueeze(-1).unsqueeze(-1)
-            )
-
-            new_trans_position_refine = torch.einsum(
-                "bijk,bkn->bijn",
-                auto_pred["loc_refine_pos"][..., : self.output_dim],
-                new_rot_mat.swapaxes(-1, -2),
-            ) + new_origin[:, :2].unsqueeze(1).unsqueeze(1)
-            auto_pred["loc_refine_pos"][..., : self.output_dim] = torch.einsum(
-                "bijk,bkn->bijn",
-                new_trans_position_refine - origin[:, :2].unsqueeze(1).unsqueeze(1),
-                rot_mat,
-            )
-            auto_pred["scale_refine_pos"][..., self.output_dim - 1] = wrap_angle(
-                auto_pred["scale_refine_pos"][..., self.output_dim - 1]
-                + new_theta.unsqueeze(-1).unsqueeze(-1)
-                - theta.unsqueeze(-1).unsqueeze(-1)
-            )
-
-
-            if self.output_head:
-                auto_traj_propose = torch.cat(
-                    [
-                        auto_pred["loc_propose_pos"][..., : self.output_dim],
-                        auto_pred["loc_propose_head"],
-                        auto_pred["scale_propose_pos"][..., : self.output_dim],
-                        auto_pred["conc_propose_head"],
-                    ],
-                    dim=-1,
-                )
-                auto_traj_refine = torch.cat(
-                    [
-                        auto_pred["loc_refine_pos"][..., : self.output_dim],
-                        auto_pred["loc_refine_head"],
-                        auto_pred["scale_refine_pos"][..., : self.output_dim],
-                        auto_pred["conc_refine_head"],
-                    ],
-                    dim=-1,
-                )
-            else:
-                auto_traj_propose = torch.cat([auto_pred['loc_propose_pos'][..., :self.output_dim],
-                                        auto_pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-                auto_traj_refine = torch.cat([auto_pred['loc_refine_pos'][..., :self.output_dim],
-                                        auto_pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-
-
-            return (
-                auto_pred,
-                auto_traj_refine,
-                auto_traj_propose,
-                (new_trans_position_propose, new_trans_position_refine),
-            )
-
-        offset=5
+        new_data = data.clone()
+        auto_pred=pred
+        init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,self)
+        offset=1
         pi = pred['pi']
-        auto_pred, auto_traj_refine, auto_traj_propose, new_position = get_auto_pred(
-            data.clone(), pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),pi.argmax(-1)], pred["scale_refine_pos"][torch.arange(traj_propose.size(0)),pi.argmax(-1)], offset
+        best_mode = pi.argmax(-1)
+        new_data, auto_pred, auto_traj_refine, auto_traj_propose, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
+                new_data, self, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
         )
         traj_propose[:,:,:offset]=traj_propose[torch.arange(traj_propose.size(0)),pi.argmax(-1),:offset].unsqueeze(1)
         traj_refine[:,:,:offset]=traj_refine[torch.arange(traj_propose.size(0)),pi.argmax(-1),:offset].unsqueeze(1)
