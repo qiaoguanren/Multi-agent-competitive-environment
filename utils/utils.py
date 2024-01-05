@@ -145,23 +145,23 @@ def get_auto_pred(input_data, model, loc_refine_pos, loc_refine_head, offset, an
     )
 
 def add_new_agent(data):
-    acceleration = 0.8
+    acceleration = 0.3
     arr_s_x = np.array([])
     arr_s_y = np.array([])
     arr_v_x = np.array([])
     arr_v_y = np.array([])
     v0_x = 5*math.cos(data['agent']['heading'][data['agent']['category']==3][0,50])
-    v0_y = 5
+    v0_y = math.sqrt(25-v0_x**2)
     t = 0.1
-    x0 = x = 5258.5
-    y0 = y = 320.6
+    x0 = x = 5259.7
+    y0 = y = 318
     v_x = 0
     v_y = 0
     new_heading=torch.empty_like(data['agent']['heading'][0])
     new_heading[:]=1.9338
 
-    for i in range(80):
-        a_x = acceleration*math.cos(new_heading[i+30])
+    for i in range(110):
+        a_x = acceleration*math.cos(new_heading[i])
         x = x + v0_x*t + 0.5*acceleration*(t**2)
         v0_x = v0_x + a_x*t
         v_x = v0_x
@@ -176,12 +176,12 @@ def add_new_agent(data):
         arr_v_y = np.append(arr_v_y,v_y)
 
     new_position=torch.empty_like(data['agent']['position'][0])
-    new_position[:,0]=torch.tensor(np.concatenate([np.ones(30)*x0,arr_s_x]))
-    new_position[:,1]=torch.tensor(np.concatenate([np.ones(30)*y0,arr_s_y]))
+    new_position[:,0]=torch.tensor(np.concatenate([arr_s_x]))
+    new_position[:,1]=torch.tensor(np.concatenate([arr_s_y]))
 
     new_velocity=torch.empty_like(data['agent']['velocity'][0])
-    new_velocity[:,0]=torch.tensor(np.concatenate([np.ones(30)*0,arr_v_x]))
-    new_velocity[:,1]=torch.tensor(np.concatenate([np.ones(30)*0,arr_v_y]))
+    new_velocity[:,0]=torch.tensor(np.concatenate([arr_v_x]))
+    new_velocity[:,1]=torch.tensor(np.concatenate([arr_v_y]))
 
     data=data.clone()
     data['agent']['num_nodes']+=1   #num_nodes
@@ -203,27 +203,21 @@ def reward_function(data,new_data,model,agent_index,timestep):
                 
         reward1 = reward2 = reward3 = 0
         gt = data['agent']['position'][agent_index, model.num_historical_steps+model.num_future_steps-1:model.num_historical_steps+model.num_future_steps, :model.output_dim]
+        # gt = torch.zeros(1,2).cuda()
+        # gt[0,0] = 5283
+        # gt[0,1] = 306
         current_position = new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
-        pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-5:model.num_historical_steps-4, :model.output_dim]
+        pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
 
         delta_distance = gt-current_position
         l2_norm_current_distance = torch.norm(gt - current_position, p=2, dim=-1)
         l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
         if delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance<l2_norm_pre_distance:
-            reward1 = 50/60*(timestep+5)
+            reward1 = torch.clip(1/l2_norm_current_distance, 1 , 50).item()
         elif delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance>=l2_norm_pre_distance:
             reward1 = -50
         elif delta_distance[0,0]>=0 and delta_distance[0,1]<=0:
             reward1 = 100
-        # pre_v = data['agent']['velocity'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
-        # next_v = data['agent']['velocity'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
-        # pre_v = math.sqrt(pre_v[0,0]**2+pre_v[0,1]**2)
-        # next_v = math.sqrt(next_v[0,0]**2+next_v[0,1]**2)
-        # speed_reward = (next_v - pre_v) * 10
-        # if next_v > pre_v:
-        #      reward1 = 100 + speed_reward
-        # else:
-        #      reward1 = -50
 
         # for i in range(data['agent']['num_nodes']):
         #     if i==agent_index:

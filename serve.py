@@ -17,7 +17,7 @@ play_viedeo="""
 
 @app.route('/')
 def video_list():
-    video_files = [os.path.join(root, f) for root, dirs, files in os.walk(MEDIA_PATH) for f in files if f.endswith('.mp4')]
+    video_files = [os.path.join(root, f) for root, dirs, files in os.walk(MEDIA_PATH) for f in files if f.endswith('.webm')]
     # Inline HTML template
     template = """
     <!DOCTYPE html>

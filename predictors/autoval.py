@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-import copy
+import copy,csv
 from itertools import chain
 from itertools import compress
 from pathlib import Path
@@ -33,9 +33,12 @@ from metrics import minAHE
 from metrics import minFDE
 from metrics import minFHE
 from modules import QCNetDecoder
-from modules import QCNetEncoder
+from modules.qcnet_decoder2 import AutoQCNetDecoder
 from predictors.qcnet import QCNet
+from PPO.mappo import PPO
+
 from utils import wrap_angle
+from utils.utils import get_auto_pred, get_transform_mat
 
 try:
     from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
@@ -266,241 +269,5 @@ class AntoQCNet(QCNet):
         self.log('val_minFHE', self.minFHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
         self.log('val_MR', self.MR, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
 
+    
 
-class AntoCloestQCNet(AntoQCNet):
-
-    def validation_step(self,
-                        data,
-                        batch_idx):
-        if isinstance(data, Batch):
-            data['agent']['av_index'] += data['agent']['ptr'][:-1]
-
-        def get_transform_mat(input_data):
-            origin = input_data["agent"]["position"][:, self.num_historical_steps - 1]
-            theta = input_data["agent"]["heading"][:, self.num_historical_steps - 1]
-            cos, sin = theta.cos(), theta.sin()
-            rot_mat = theta.new_zeros(input_data["agent"]["num_nodes"], 2, 2)
-            rot_mat[:, 0, 0] = cos
-            rot_mat[:, 0, 1] = -sin
-            rot_mat[:, 1, 0] = sin
-            rot_mat[:, 1, 1] = cos
-            return origin,theta,rot_mat
-        init_origin,init_theta,init_rot_mat=get_transform_mat(data)
-        def get_auto_pred(input_data, loc_refine_pos, scale_refine_pos, offset, anchor=None):
-            old_anchor=origin,theta,rot_mat=get_transform_mat(input_data)
-            # auto_index = data['agent']['valid_mask'][:,self.num_historical_steps]
-            input_data["agent"]["valid_mask"] = (
-                torch.cat(
-                    (
-                        input_data["agent"]["valid_mask"][..., offset:],
-                        torch.zeros(input_data["agent"]["valid_mask"].shape[:-1] + (5,)).cuda(),
-                    ),
-                    dim=-1,
-                )
-            ).bool()
-            input_data["agent"]["valid_mask"][:, 0] = False
-
-            new_position = torch.matmul(
-                loc_refine_pos[..., :2], rot_mat.swapaxes(-1, -2)
-            ) + origin[:, :2].unsqueeze(1)
-
-            input_position = torch.zeros_like(input_data["agent"]["position"])
-            input_position[:, :-offset] = input_data["agent"]["position"][:, offset:]
-            input_position[
-                :, self.num_historical_steps - offset : self.num_historical_steps, :2
-            ] = new_position[:, :offset]
-
-            input_heading = torch.zeros_like(input_data["agent"]["heading"])
-            input_heading[:, :-offset] = input_data["agent"]["heading"][:, offset:]
-            input_heading[
-                :, self.num_historical_steps - offset : self.num_historical_steps
-            ] = wrap_angle(scale_refine_pos[..., :offset, 1] + theta.unsqueeze(-1))
-
-            input_v = torch.zeros_like(input_data["agent"]["velocity"])
-            input_v[:, :-offset] = input_data["agent"]["velocity"][:, offset:]
-            input_v[:, self.num_historical_steps - offset : self.num_historical_steps, :2] = (
-                new_position[:, 1:] - new_position[:, :-1]
-            )[:, :offset] / 0.1
-
-            input_data["agent"]["position"] = input_position
-            input_data["agent"]["heading"] = input_heading
-            input_data["agent"]["velocity"] = input_v
-
-            auto_pred = self(input_data)
-
-            new_anchor=get_transform_mat(input_data)
-            def get_transform_res(old_anchor,new_anchor,auto_pred):
-                old_origin,old_theta,old_rot_mat=old_anchor
-                new_origin,new_theta,new_rot_mat=new_anchor
-                new_trans_position_propose = torch.einsum(
-                    "bijk,bkn->bijn",
-                    auto_pred["loc_propose_pos"][..., : self.output_dim],
-                    new_rot_mat.swapaxes(-1, -2),
-                ) + new_origin[:, :2].unsqueeze(1).unsqueeze(1)
-                auto_pred["loc_propose_pos"][..., : self.output_dim] = torch.einsum(
-                    "bijk,bkn->bijn",
-                    new_trans_position_propose - old_origin[:, :2].unsqueeze(1).unsqueeze(1),
-                    old_rot_mat,
-                )
-                auto_pred["scale_propose_pos"][..., self.output_dim - 1] = wrap_angle(
-                    auto_pred["scale_propose_pos"][..., self.output_dim - 1]
-                    + new_theta.unsqueeze(-1).unsqueeze(-1)
-                    - old_theta.unsqueeze(-1).unsqueeze(-1)
-                )
-
-                new_trans_position_refine = torch.einsum(
-                    "bijk,bkn->bijn",
-                    auto_pred["loc_refine_pos"][..., : self.output_dim],
-                    new_rot_mat.swapaxes(-1, -2),
-                ) + new_origin[:, :2].unsqueeze(1).unsqueeze(1)
-                auto_pred["loc_refine_pos"][..., : self.output_dim] = torch.einsum(
-                    "bijk,bkn->bijn",
-                    new_trans_position_refine - old_origin[:, :2].unsqueeze(1).unsqueeze(1),
-                    old_rot_mat,
-                )
-                auto_pred["scale_refine_pos"][..., self.output_dim - 1] = wrap_angle(
-                    auto_pred["scale_refine_pos"][..., self.output_dim - 1]
-                    + new_theta.unsqueeze(-1).unsqueeze(-1)
-                    - old_theta.unsqueeze(-1).unsqueeze(-1)
-                )
-                return auto_pred,(new_trans_position_propose, new_trans_position_refine),
-
-            auto_pred,(new_trans_position_propose, new_trans_position_refine)=get_transform_res(old_anchor,new_anchor,auto_pred)
-            
-            if self.output_head:
-                auto_traj_propose = torch.cat(
-                    [
-                        auto_pred["loc_propose_pos"][..., : self.output_dim],
-                        auto_pred["loc_propose_head"],
-                        auto_pred["scale_propose_pos"][..., : self.output_dim],
-                        auto_pred["conc_propose_head"],
-                    ],
-                    dim=-1,
-                )
-                auto_traj_refine = torch.cat(
-                    [
-                        auto_pred["loc_refine_pos"][..., : self.output_dim],
-                        auto_pred["loc_refine_head"],
-                        auto_pred["scale_refine_pos"][..., : self.output_dim],
-                        auto_pred["conc_refine_head"],
-                    ],
-                    dim=-1,
-                )
-            else:
-                auto_traj_propose = torch.cat([auto_pred['loc_propose_pos'][..., :self.output_dim],
-                                        auto_pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-                auto_traj_refine = torch.cat([auto_pred['loc_refine_pos'][..., :self.output_dim],
-                                        auto_pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-            if anchor is not None:
-                anchor_auto_pred,_=get_transform_res(anchor,new_anchor,copy.deepcopy(auto_pred))
-                anchor_auto_traj_propose = torch.cat([anchor_auto_pred['loc_propose_pos'][..., :self.output_dim],
-                                        anchor_auto_pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-                anchor_auto_traj_refine = torch.cat([anchor_auto_pred['loc_refine_pos'][..., :self.output_dim],
-                                        anchor_auto_pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-
-            return (
-                input_data,
-                auto_pred,
-                auto_traj_refine,
-                auto_traj_propose,
-                (new_trans_position_propose, new_trans_position_refine),
-                None if anchor is None else (anchor_auto_traj_propose, anchor_auto_traj_refine)
-            )
-
-        offset=10
-        new_data=data.clone()
-        pred = self(new_data)
-        if self.output_head:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                    pred['loc_propose_head'],
-                                    pred['scale_propose_pos'][..., :self.output_dim],
-                                    pred['conc_propose_head']], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                    pred['loc_refine_head'],
-                                    pred['scale_refine_pos'][..., :self.output_dim],
-                                    pred['conc_refine_head']], dim=-1)
-        else:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                    pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                    pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-        final_traj_propose=torch.zeros_like(traj_propose)
-        final_traj_refine=torch.zeros_like(traj_refine)
-        auto_pred=pred
-        for timestep in range(0,self.num_future_steps,offset):
-            reg_mask = new_data['agent']['predict_mask'][:, self.num_historical_steps:]
-            cls_mask = new_data['agent']['predict_mask'][:, -1]
-            gt = torch.cat([new_data['agent']['target'][...,timestep:timestep+offset, :self.output_dim], new_data['agent']['target'][...,timestep:timestep+offset, -1:]], dim=-1)
-            l2_norm = (torch.norm(traj_propose[...,:offset, :self.output_dim] -
-                                gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask[...,timestep:timestep+offset].unsqueeze(1)).sum(dim=-1)
-            best_mode = l2_norm.argmin(dim=-1)
-            final_traj_propose[:,:,timestep:timestep+offset]=traj_propose[torch.arange(traj_propose.size(0)),best_mode,:offset].unsqueeze(1)
-            final_traj_refine[:,:,timestep:timestep+offset]=traj_refine[torch.arange(traj_propose.size(0)),best_mode,:offset].unsqueeze(1)
-            new_data, auto_pred, _, _, _,(traj_propose, traj_refine) = get_auto_pred(
-                new_data, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["scale_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], offset,anchor=(init_origin,init_theta,init_rot_mat)
-            )
-            pi = auto_pred['pi']
-            
-
-
-        traj_propose=final_traj_propose
-        traj_refine=final_traj_refine
-        reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
-        cls_mask = data['agent']['predict_mask'][:, -1]
-
-        gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
-                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        best_mode = l2_norm.argmin(dim=-1)
-        traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-        reg_loss_propose = self.reg_loss(traj_propose_best,
-                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_propose = reg_loss_propose.mean()
-        reg_loss_refine = self.reg_loss(traj_refine_best,
-                                        gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_refine = reg_loss_refine.mean()
-        cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
-                                 target=gt[:, -1:, :self.output_dim + self.output_head],
-                                 prob=pi,
-                                 mask=reg_mask[:, -1:]) * cls_mask
-        cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
-        self.log('val_reg_loss_propose', reg_loss_propose, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
-                 sync_dist=True)
-        self.log('val_reg_loss_refine', reg_loss_refine, prog_bar=True, on_step=False, on_epoch=True, batch_size=1,
-                 sync_dist=True)
-        self.log('val_cls_loss', cls_loss, prog_bar=True, on_step=False, on_epoch=True, batch_size=1, sync_dist=True)
-
-        if self.dataset == 'argoverse_v2':
-            eval_mask = data['agent']['category'] == 3
-        else:
-            raise ValueError('{} is not a valid dataset'.format(self.dataset))
-        valid_mask_eval = reg_mask[eval_mask]
-        traj_eval = traj_refine[eval_mask, :, :, :self.output_dim + self.output_head]
-        if not self.output_head:
-            traj_2d_with_start_pos_eval = torch.cat([traj_eval.new_zeros((traj_eval.size(0), self.num_modes, 1, 2)),
-                                                     traj_eval[..., :2]], dim=-2)
-            motion_vector_eval = traj_2d_with_start_pos_eval[:, :, 1:] - traj_2d_with_start_pos_eval[:, :, :-1]
-            head_eval = torch.atan2(motion_vector_eval[..., 1], motion_vector_eval[..., 0])
-            traj_eval = torch.cat([traj_eval, head_eval.unsqueeze(-1)], dim=-1)
-        pi_eval = F.softmax(pi[eval_mask], dim=-1)
-        gt_eval = gt[eval_mask]
-
-        self.Brier.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
-                          valid_mask=valid_mask_eval)
-        self.minADE.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
-                           valid_mask=valid_mask_eval)
-        self.minAHE.update(pred=traj_eval, target=gt_eval, prob=pi_eval, valid_mask=valid_mask_eval)
-        self.minFDE.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
-                           valid_mask=valid_mask_eval)
-        self.minFHE.update(pred=traj_eval, target=gt_eval, prob=pi_eval, valid_mask=valid_mask_eval)
-        self.MR.update(pred=traj_eval[..., :self.output_dim], target=gt_eval[..., :self.output_dim], prob=pi_eval,
-                       valid_mask=valid_mask_eval)
-        self.log('val_Brier', self.Brier, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        self.log('val_minADE', self.minADE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        self.log('val_minAHE', self.minAHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        self.log('val_minFDE', self.minFDE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        self.log('val_minFHE', self.minFHE, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))
-        self.log('val_MR', self.MR, prog_bar=True, on_step=False, on_epoch=True, batch_size=gt_eval.size(0))

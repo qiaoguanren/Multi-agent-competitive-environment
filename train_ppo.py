@@ -11,16 +11,10 @@ from argparse import ArgumentParser
 from datasets import ArgoverseV2Dataset
 from predictors import QCNet
 from predictors.autoval import AntoQCNet
+from predictors.environment import WorldModel
 from transforms import TargetBuilder
-from av2.datasets.motion_forecasting import scenario_serialization
-from av2.datasets.motion_forecasting.data_schema import (
-    ArgoverseScenario,
-    ObjectType,
-    TrackCategory,
-)
-from av2.map.map_api import ArgoverseStaticMap
 from pathlib import Path
-from visualization.vis import vis_reward, generate_video, vis_adcr
+from visualization.vis import vis_reward
 from utils.geometry import wrap_angle
 from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function
 from torch_geometric.data import Batch
@@ -43,6 +37,9 @@ args = parser.parse_args("")
 
 model = {
     "QCNet": AntoQCNet,
+}[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
+environment = {
+    "QCNet": WorldModel,
 }[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
 val_dataset = {
     "argoverse_v2": ArgoverseV2Dataset,
@@ -91,10 +88,12 @@ next_version_folder = f"version_{max_epoch + 1}/"
 next_version_path = os.path.join(base_path, next_version_folder)
 os.makedirs(next_version_path, exist_ok=True)
 
-for episode in tqdm(range(config['episodes'])):
-    offset=5
+cumulative_reward = [[] for _ in range(new_input_data['agent']['num_nodes'])]
 
-    transition_list = [{'datas': [],
+for episode in tqdm(range(config['episodes'])):
+    offset=config['offset']
+
+    transition_list = [{
                 'states': [],
                 'actions': [],
                 'next_states': [],
@@ -104,9 +103,7 @@ for episode in tqdm(range(config['episodes'])):
     agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
 
     agent = PPO(
-            state_dim=model.num_historical_steps*config['hidden_dim'],
-            encoder = model.encoder,
-            decoder = model.decoder,
+            state_dim=model.num_modes*config['hidden_dim'],
             agent_index = agent_index,
             hidden_dim = config['hidden_dim'],
             action_dim = model.output_dim+1,
@@ -122,8 +119,6 @@ for episode in tqdm(range(config['episodes'])):
             entropy_coef=config['entropy_coef'],
             epochs = config['epochs']
     )
-
-    cumulative_reward = [{'return': []} for _ in range(new_input_data['agent']['num_nodes'])]
 
     for batch in range(config['buffer_batchsize']):
         new_data=new_input_data.cuda().clone()
@@ -152,7 +147,7 @@ for episode in tqdm(range(config['episodes'])):
             rot_mat.swapaxes(-1, -2),
         ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
 
-        state = model.encoder(new_data)
+        state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
 
         for timestep in range(0,model.num_future_steps,offset):
 
@@ -160,8 +155,7 @@ for episode in tqdm(range(config['episodes'])):
             reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
             init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
             
-            sample_action = agent.choose_action([state], model.decoder,[new_data],agent_index,offset)
-            transition_list[batch]['datas'].append(new_data)
+            sample_action = agent.choose_action(state)
 
             best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
             best_mode = torch.cat([best_mode, torch.tensor([0])],dim=-1)
@@ -174,9 +168,9 @@ for episode in tqdm(range(config['episodes'])):
                 new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
             )
 
-            next_state = model.encoder(new_data)
+            next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
             transition_list[batch]['states'].append(state)
-            transition_list[batch]['actions'].append(sample_action[:offset,:])
+            transition_list[batch]['actions'].append(sample_action)
             transition_list[batch]['next_states'].append(next_state)
             if timestep == model.num_future_steps - offset:
                 transition_list[batch]['dones'].append(torch.tensor(1).cuda())
@@ -190,21 +184,19 @@ for episode in tqdm(range(config['episodes'])):
 
     discounted_return = 0
     undiscounted_return = 0
-    adcr = []
+
     for t in reversed(range(0, int(model.num_future_steps/offset))):
-        discounted_return = (config['gamma'] * discounted_return) + float(transition_list[-1]['rewards'][t])
-        undiscounted_return += float(transition_list[-1]['rewards'][t])
-        if episode % 100 == 0:
-             adcr.append(discounted_return)
-    cumulative_reward[0]['return'].append(discounted_return)
-    cumulative_reward[1]['return'].append(undiscounted_return)
+        _sum = 0
+        for i in range(config['buffer_batchsize']):
+             _sum+=float(transition_list[i]['rewards'][t])
+        mean_reward = _sum/config['buffer_batchsize']
+        discounted_return = (config['gamma'] * discounted_return) + mean_reward
+        undiscounted_return += mean_reward
 
-    if episode % 100 == 0:
-        adcr.reverse()
-        vis_adcr(adcr,next_version_path,offset)
+    print(discounted_return, undiscounted_return)
 
-vis_reward(new_data,cumulative_reward,0,config['episodes'],next_version_path)
-vis_reward(new_data,cumulative_reward,1,config['episodes'],next_version_path)
+    cumulative_reward[agent_index].append(discounted_return)
+    cumulative_reward[agent_index+1].append(undiscounted_return)
 
 pi_state_dict = agent.pi.state_dict()
 old_pi_state_dict = agent.old_pi.state_dict()
@@ -219,3 +211,6 @@ base_path = 'checkpoints/'
 next_version_path = os.path.join(base_path, next_version_folder)
 os.makedirs(next_version_path, exist_ok=True)
 torch.save(model_state_dict, next_version_path+'PPO_episodes='+str(config['episodes'])+'_epochs='+str(config['epochs'])+'.ckpt')
+
+vis_reward(new_data,cumulative_reward,agent_index,episode,next_version_path)
+vis_reward(new_data,cumulative_reward,agent_index+1,episode,next_version_path)

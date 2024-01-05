@@ -306,6 +306,7 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, timestep: int):
             y_min, y_max = actor_trajectory[:, 1].min(), actor_trajectory[:, 1].max()
             track_bounds = (x_min, x_max, y_min, y_max)
             track_color = _FOCAL_AGENT_COLOR
+
             _plot_polylines([actor_trajectory], color=track_color, line_width=2)
             ax.arrow(actor_trajectory[-1,0], actor_trajectory[-1,1], data['agent']['velocity'][i,timestep,0].cpu(),data['agent']['velocity'][i,timestep,1].cpu(),
               width=0.1,
@@ -371,13 +372,14 @@ def plot_traj_with_data(data,scenario_static_map,t=50,bounds=80.0):
     cur_plot_bounds = _plot_actor_tracks_with_data(ax, data, t)
     if cur_plot_bounds:
         plot_bounds = cur_plot_bounds
+        # print(plot_bounds)
     plt.xlim(
-        plot_bounds[0] - bounds,
-        plot_bounds[1] + bounds,
+        5256 - bounds,
+        5265 + bounds,
     )
     plt.ylim(
-        plot_bounds[2] - bounds,
-        plot_bounds[3] + bounds,
+        295 - bounds,
+        330 + bounds,
     )
     plt.gca().set_aspect("equal", adjustable="box")
     plt.gca().set_axis_off()
@@ -405,9 +407,9 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
           auto_pred=pred
           init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
 
-          for i in range(30,110):
+          for i in range(40,110):
               if i<50:
-                  plot_traj_with_data(new_data,scenario_static_map,bounds=30,t=i)
+                  plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=i)
               else:
                   if i%offset==0:
                       # true_trans_position_propose=new_true_trans_position_propose
@@ -422,12 +424,12 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                       new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                           new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0], offset,anchor=(init_origin,init_theta,init_rot_mat)
                       )
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=30,t=50-offset)
+                      plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                   else:
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=30,t=50-offset+i%offset)
+                      plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
@@ -440,7 +442,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
               buf.seek(0)
               frame = img.open(buf)
               frames.append(frame)
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    fourcc = cv2.VideoWriter_fourcc(*"VP80")
     video = cv2.VideoWriter(vid_path, fourcc, fps=10, frameSize=frames[0].size)
     for i in range(len(frames)):
         frame_temp = frames[i].copy()
@@ -448,13 +450,13 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
     video.release()
 
 def vis_reward(data,cumulative_reward,agent_index,episodes,version_path):
-    # true_traj_refine[-1][0]
+
     window_size = 5
     moving_avg_rewards = [[] for _ in range(data['agent']['num_nodes'])]
 
 
-    for j in range(len(cumulative_reward[agent_index]['return'])-window_size+1):
-        window = cumulative_reward[agent_index]['return'][j:j+window_size]
+    for j in range(len(cumulative_reward[agent_index])-window_size+1):
+        window = cumulative_reward[agent_index][j:j+window_size]
         avg_reward = np.mean(window)
         moving_avg_rewards[agent_index].append(avg_reward)
           
