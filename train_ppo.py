@@ -147,13 +147,14 @@ for episode in tqdm(range(config['episodes'])):
             rot_mat.swapaxes(-1, -2),
         ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
 
+        init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
+
         state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
 
         for timestep in range(0,model.num_future_steps,offset):
 
             true_trans_position_refine=new_true_trans_position_refine
             reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
-            init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
             
             sample_action = agent.choose_action(state)
 

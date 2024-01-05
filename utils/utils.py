@@ -213,7 +213,7 @@ def reward_function(data,new_data,model,agent_index,timestep):
         l2_norm_current_distance = torch.norm(gt - current_position, p=2, dim=-1)
         l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
         if delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance<l2_norm_pre_distance:
-            reward1 = torch.clip(1/l2_norm_current_distance, 1 , 50).item()
+            reward1 = torch.clip(1/l2_norm_current_distance, 1, 50).item()
         elif delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance>=l2_norm_pre_distance:
             reward1 = -50
         elif delta_distance[0,0]>=0 and delta_distance[0,1]<=0:

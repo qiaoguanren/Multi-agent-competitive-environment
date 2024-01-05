@@ -6,7 +6,7 @@ eps: 0.2
 hidden_dim: 128
 entropy_coef: 0.001
 epochs: 100
-buffer_batchsize: 16
+buffer_batchsize: 32
 sample_batchsize: 64
-episodes: 100
-offset: 1
+episodes: 500
+offset: 5
