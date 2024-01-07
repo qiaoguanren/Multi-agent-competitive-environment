@@ -199,25 +199,29 @@ def add_new_agent(data):
     data['agent']['ptr'][1]+=1    #ptr
     return data
 
-def reward_function(data,new_data,model,agent_index,timestep):
+def reward_function(data,new_data,model,agent_index):
                 
         reward1 = reward2 = reward3 = 0
         gt = data['agent']['position'][agent_index, model.num_historical_steps+model.num_future_steps-1:model.num_historical_steps+model.num_future_steps, :model.output_dim]
+        start_point = data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
         # gt = torch.zeros(1,2).cuda()
         # gt[0,0] = 5283
         # gt[0,1] = 306
         current_position = new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
         pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
 
-        delta_distance = gt-current_position
-        l2_norm_current_distance = torch.norm(gt - current_position, p=2, dim=-1)
-        l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
-        if delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance<l2_norm_pre_distance:
-            reward1 = torch.clip(1/l2_norm_current_distance, 1, 50).item()
-        elif delta_distance[0,0]<0 and delta_distance[0,1]>0 and l2_norm_current_distance>=l2_norm_pre_distance:
-            reward1 = -50
-        elif delta_distance[0,0]>=0 and delta_distance[0,1]<=0:
-            reward1 = 100
+        # delta_distance = gt-current_position
+        # l2_norm_current_distance = torch.norm(gt - current_position, p=2, dim=-1)
+        # l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
+        total_distance = torch.norm(gt - start_point, p=2, dim=-1)
+        travel_distance = torch.norm(current_position - start_point, p=2, dim=-1)
+        # if delta_distance[0,0]<=0 and delta_distance[0,1]>=0 and l2_norm_current_distance<l2_norm_pre_distance:
+        #     reward1 = torch.clip(50/l2_norm_current_distance, 1, 50).item()
+        # elif delta_distance[0,0]<=0 and delta_distance[0,1]>=0 and l2_norm_current_distance>=l2_norm_pre_distance:
+        #     reward1 = -50
+        # elif delta_distance[0,0]>=0 and delta_distance[0,1]<=0:
+        #     reward1 = 100
+        reward1 = 100*travel_distance/total_distance
 
         # for i in range(data['agent']['num_nodes']):
         #     if i==agent_index:

@@ -16,7 +16,7 @@ from av2.datasets.motion_forecasting.data_schema import (
     TrackCategory,
 )
 from datetime import datetime
-from utils.utils import get_auto_pred, get_transform_mat
+from utils.utils import get_auto_pred, get_transform_mat, reward_function
 
 
 _DRIVABLE_AREA_COLOR: Final[str] = "#7A7A7A"
@@ -391,7 +391,7 @@ def plot_traj_with_data(data,scenario_static_map,t=50,bounds=80.0):
 def generate_video(new_input_data,scenario_static_map, model, vid_path):
     frames = []
     with torch.no_grad():
-          offset=1
+          offset=5
           new_data=new_input_data.cuda().clone()
           pred = model(new_data)
           traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
@@ -406,21 +406,35 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
           ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
           auto_pred=pred
           init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
+          agent_index = torch.nonzero(new_input_data['agent']['category']==3,as_tuple=False).item()
 
           for i in range(40,110):
               if i<50:
                   plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=i)
               else:
-                  if i%offset==0:
+                  if (110-i)%offset==0:
                       # true_trans_position_propose=new_true_trans_position_propose
                       true_trans_position_refine=new_true_trans_position_refine
+                      # print(traj_propose[new_data["agent"]["category"] == 3,:,offset,:2])
+                      # max_value = -1
+                      # max_index = -1
+                      # for k in range(6):
+                      #     x = traj_propose[new_data["agent"]["category"] == 3, k, offset, 0].cpu()
+                      #     y = traj_propose[new_data["agent"]["category"] == 3, k, offset, 1].cpu()
+                      #     value = np.sqrt(x**2 + y**2)
+                      #     if value > max_value:
+                      #         max_value = value
+                      #         max_index = k
+
+                      print(reward_function(new_input_data,new_data,model,agent_index))
                       # reg_mask = new_data['agent']['predict_mask'][:, model.num_historical_steps:]
                       # cls_mask = new_data['agent']['predict_mask'][:, -1]
                       # gt = torch.cat([data['agent']['target'][...,timestep:timestep+offset, :model.output_dim], data['agent']['target'][...,timestep:timestep+offset, -1:]], dim=-1)
                       # l2_norm = (torch.norm(traj_propose[:-1,...,:offset, :model.output_dim] -
                       #                     gt[..., :model.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask[:-1,...,:offset].unsqueeze(1)).sum(dim=-1)
                       # best_mode = l2_norm.argmin(dim=-1)
-                      best_mode=torch.randint(1,size=(new_input_data['agent']['num_nodes'],))
+                      best_mode=torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
+                      # best_mode[new_data["agent"]["category"] == 3] = max_index
                       new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                           new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0], offset,anchor=(init_origin,init_theta,init_rot_mat)
                       )
@@ -429,10 +443,10 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                   else:
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
+                      plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+(i-50)%offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                          plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
+                          plt.plot(xy[j, (i-50)%offset:, 0], xy[j, (i-50)%offset:, 1])
                   
 
               plt.title(f"timestep={i}")

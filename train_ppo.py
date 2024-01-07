@@ -177,7 +177,7 @@ for episode in tqdm(range(config['episodes'])):
                 transition_list[batch]['dones'].append(torch.tensor(1).cuda())
             else:
                 transition_list[batch]['dones'].append(torch.tensor(0).cuda())
-            reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index, timestep)
+            reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index)
             transition_list[batch]['rewards'].append(torch.tensor(reward).cuda())
             state = next_state
             

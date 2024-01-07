@@ -97,7 +97,7 @@ with open("configs/PPO_epoch100.yaml", "r") as file:
         config = yaml.safe_load(file)
 file.close()
 
-model_state_dict = torch.load('checkpoints/version_2/PPO_episodes=100_epochs=100.ckpt')
+model_state_dict = torch.load('checkpoints/version_4/PPO_episodes=500_epochs=100.ckpt')
 
 episodes = 10
 
@@ -160,8 +160,9 @@ with torch.no_grad():
                 pred["loc_refine_pos"][..., : model.output_dim],
                 rot_mat.swapaxes(-1, -2),
             ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
+            init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
             frames = []
-            state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
+            state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
             for i in range(40,110):
                   if i<50:
                       if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
@@ -170,15 +171,14 @@ with torch.no_grad():
                       if i%offset==0:
                           true_trans_position_refine=new_true_trans_position_refine
                           reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
-                          init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
                           
                           sample_action = agent.choose_action(state)
 
-                          best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
-                          best_mode = torch.cat([best_mode, torch.tensor([0])],dim=-1)
+                          best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
                           l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
                                               sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[:offset].unsqueeze(0)).sum(dim=-1)
                           action_suggest_index=l2_norm.argmin(dim=-1)
+                          print(action_suggest_index)
                           best_mode[agent_index] = action_suggest_index
 
                           new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
@@ -193,20 +193,20 @@ with torch.no_grad():
                               transition_list[batch]['dones'].append(torch.tensor(1).cuda())
                           else:
                               transition_list[batch]['dones'].append(torch.tensor(0).cuda())
-                          reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index, i)
-                          transition_list[batch]['rewards'].append(torch.tensor(reward).cuda())
+                          reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index)
+                          transition_list[batch]['rewards'].append(reward.clone())
                           state = next_state
                           if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
                               plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset)
                               for j in range(6):
                                 xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                                 plt.plot(xy[j, ..., 0], xy[j, ..., 1])
-                      # else:
-                      #     if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
-                      #         plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
-                      #         for j in range(6):
-                      #           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                      #           plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
+                      else:
+                          if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
+                              plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
+                              for j in range(6):
+                                xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                                plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
 
                   buf = io.BytesIO()
                   plt.savefig(buf, format="png")
