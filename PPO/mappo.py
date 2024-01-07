@@ -27,7 +27,7 @@ class Policy(nn.Module):
     def forward(self, state):
 
         mean = self.f(state)
-        mean = torch.cat([mean[:,:2],(torch.tanh(mean[:,-1].clone().detach().requires_grad_(True))*torch.tensor([math.pi]).cuda()).unsqueeze(-1)],dim=-1)
+        mean = torch.tanh(mean)
         var = F.softplus(self.f(state)) + 1e-8
 
         return mean, var
@@ -129,7 +129,7 @@ class PPO:
             next_states = torch.stack(next_states, dim=0).flatten(start_dim=1)
             rewards = torch.stack(rewards, dim=0).view(-1,1)
             dones = torch.stack(dones, dim=0).view(-1,1)
-            actions = torch.stack(actions, dim=0)
+            actions = torch.stack(actions, dim=0).flatten(start_dim=1)
 
             with torch.no_grad():
                 # td_error

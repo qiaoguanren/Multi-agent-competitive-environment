@@ -24,13 +24,13 @@ pl.seed_everything(2023, workers=True)
 
 parser = ArgumentParser()
 parser.add_argument("--model", type=str, default="QCNet")
-parser.add_argument("--root", type=str, default="/home/guanren/Multi-agent-competitive-environment/datasets")
+parser.add_argument("--root", type=str, default="/data2/guanren/qcnet_datasets")
 parser.add_argument("--batch_size", type=int, default=1)
 parser.add_argument("--num_workers", type=int, default=8)
 parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
-parser.add_argument("--devices", type=int, default=1)
+parser.add_argument("--devices", type=int, default=2)
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
 parser.add_argument("--ppo_config", default="PPO_epoch100.yaml", type=str)
 args = parser.parse_args("")
@@ -66,6 +66,10 @@ data = next(it)
 for param in model.encoder.parameters():
         param.requires_grad = False
 for param in model.decoder.parameters():
+        param.requires_grad = False
+for param in environment.encoder.parameters():
+        param.requires_grad = False
+for param in environment.decoder.parameters():
         param.requires_grad = False
 
 if isinstance(data, Batch):
@@ -106,7 +110,7 @@ for episode in tqdm(range(config['episodes'])):
             state_dim=model.num_modes*config['hidden_dim'],
             agent_index = agent_index,
             hidden_dim = config['hidden_dim'],
-            action_dim = model.output_dim+1,
+            action_dim = 3*offset,
             batchsize = config['sample_batchsize'],
             actor_learning_rate = config['actor_learning_rate'],
             critic_learning_rate = config['critic_learning_rate'],
@@ -157,6 +161,11 @@ for episode in tqdm(range(config['episodes'])):
             reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
             
             sample_action = agent.choose_action(state)
+            action = sample_action.flatten(start_dim = 1)
+            min_val = action.min()
+            max_val = action.max()
+            normalized_tensor = (action - min_val) / (max_val - min_val)
+            action = (2 * math.pi/2 * normalized_tensor - math.pi/2)
 
             best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
             best_mode = torch.cat([best_mode, torch.tensor([0])],dim=-1)
@@ -171,14 +180,14 @@ for episode in tqdm(range(config['episodes'])):
 
             next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
             transition_list[batch]['states'].append(state)
-            transition_list[batch]['actions'].append(sample_action)
+            transition_list[batch]['actions'].append(action)
             transition_list[batch]['next_states'].append(next_state)
             if timestep == model.num_future_steps - offset:
                 transition_list[batch]['dones'].append(torch.tensor(1).cuda())
             else:
                 transition_list[batch]['dones'].append(torch.tensor(0).cuda())
             reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index)
-            transition_list[batch]['rewards'].append(torch.tensor(reward).cuda())
+            transition_list[batch]['rewards'].append(reward.clone())
             state = next_state
             
     agent.update(transition_list, config['buffer_batchsize'])
