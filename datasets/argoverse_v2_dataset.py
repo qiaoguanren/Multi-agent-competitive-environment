@@ -180,6 +180,7 @@ class ArgoverseV2Dataset(Dataset):
         for raw_file_name in self.raw_file_names:
             shutil.move(os.path.join(self.raw_dir, self.split, raw_file_name), self.raw_dir)
         os.rmdir(os.path.join(self.raw_dir, self.split))
+        print('done')
 
     def process(self) -> None:
         for raw_file_name in tqdm(self.raw_file_names):

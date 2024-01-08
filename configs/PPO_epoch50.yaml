@@ -1,0 +1,12 @@
+actor_learning_rate : 0.00004
+critic_learning_rate: 0.0001
+gamma: 0.95
+lamda: 0.97
+eps: 0.2
+hidden_dim: 128
+entropy_coef: 0.005
+epochs: 50
+buffer_batchsize: 16
+sample_batchsize: 64
+episodes: 50
+offset: 1

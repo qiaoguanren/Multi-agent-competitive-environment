@@ -111,3 +111,14 @@ venv.bak/
 # seed project
 lightning_logs/
 .DS_Store
+datasets/
+checkpoints/
+figures/
+train_ppo.sh
+ground_truth.mp4
+nohup.out
+test.webm
+videos/test_ppo_20240106_132433.webm
+videos/test_ppo_20240106_210532.webm
+videos/test_ppo_20240107_161201.webm
+datasets/argoverse_v2_dataset.py
