@@ -488,6 +488,10 @@ def vis_reward(data,cumulative_reward,agent_index,episodes,version_path):
 
     current_time = datetime.now()
     timestamp = current_time.strftime("%Y%m%d_%H%M%S")
+    full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'reward_{timestamp}.png'
+    plt.savefig(full_path)
+
+
 def vis_entropy(entropy_list, episode, version_path):
     x = range(len(entropy_list))
     plt.figure(figsize=(10, 10))

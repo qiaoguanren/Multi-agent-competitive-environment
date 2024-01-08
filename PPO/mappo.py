@@ -27,7 +27,6 @@ class Policy(nn.Module):
 
         mean = self.f(state)
         var = F.sigmoid(self.f(state)) + 1e-8
-
         return mean, var
     
 class ValueNet(nn.Module):
