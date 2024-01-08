@@ -1,0 +1,7 @@
+actor_learning_rate : 0.0005
+hidden_dim: 128
+epochs: 500
+buffer_batchsize: 32
+sample_batchsize: 64
+episodes: 100
+offset: 5

@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 import numpy as np
 from tqdm import tqdm
+from visualization.vis import vis_entropy
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
@@ -16,37 +17,30 @@ class Policy(nn.Module):
     def __init__(self, state_dim, hidden_dim, action_dim):
         super(Policy, self).__init__()
         self.f = nn.Sequential(
-            layer_init(nn.Linear(state_dim, hidden_dim*2)),
-            nn.ReLU(),
-            layer_init(nn.Linear(hidden_dim*2, hidden_dim//2)),
-            nn.ReLU(),
-            layer_init(nn.Linear(hidden_dim//2, action_dim),std=0.01)
+            layer_init(nn.Linear(state_dim, hidden_dim)),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(inplace=True),
+            layer_init(nn.Linear(hidden_dim, action_dim)),
         )
-        self.hidden_dim = hidden_dim
     
     def forward(self, state):
 
         mean = self.f(state)
-        mean = torch.cat([mean[:,:2],(torch.tanh(mean[:,-1].clone().detach().requires_grad_(True))*torch.tensor([math.pi]).cuda()).unsqueeze(-1)],dim=-1)
-        var = F.softplus(self.f(state)) + 1e-8
-
+        var = F.sigmoid(self.f(state)) + 1e-8
         return mean, var
     
 class ValueNet(nn.Module):
     def __init__(self, state_dim, hidden_dim):
         super(ValueNet, self).__init__()
         self.fc = nn.Sequential(
-            layer_init(nn.Linear(state_dim, hidden_dim*2)),
-            nn.Tanh(),
-            layer_init(nn.Linear(hidden_dim*2, hidden_dim)),
-            nn.Tanh(),
+            layer_init(nn.Linear(state_dim, hidden_dim)),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(inplace=True),
             layer_init(nn.Linear(hidden_dim, hidden_dim//2)),
-            nn.Tanh(),
-            layer_init(nn.Linear(hidden_dim//2, hidden_dim//4)),
-            nn.Tanh(),
-            layer_init(nn.Linear(hidden_dim//4, 1), std=1.0),
+            nn.LayerNorm(hidden_dim//2),
+            nn.ReLU(inplace=True),
+            layer_init(nn.Linear(hidden_dim//2, 1)),
         )
-        self.hidden_dim = hidden_dim
 
     def forward(self, states):
 
@@ -73,6 +67,7 @@ class PPO:
         self.pi = Policy(state_dim, hidden_dim, action_dim).to(device)
         self.old_pi = Policy(state_dim, hidden_dim, action_dim).to(device)
         self.value = ValueNet(state_dim, hidden_dim).to(device)
+        self.old_value = ValueNet(state_dim, hidden_dim).to(device)
         self.batchsize = batchsize
         self.actor_lr = actor_learning_rate
         self.critic_lr = critic_learning_rate
@@ -99,15 +94,16 @@ class PPO:
         s_next = []
         done = []
 
-        for _ in range(sample_batchsize):
+        with torch.no_grad():
+            for _ in range(sample_batchsize):
 
-            row = random.randint(0,buffer_batchsize-1)
-            col = random.randint(0,int(60/offset)-1)
-            s.append(transition[row]['states'][col])
-            a.append(transition[row]['actions'][col])
-            r.append(transition[row]['rewards'][col])
-            s_next.append(transition[row]['next_states'][col])
-            done.append(transition[row]['dones'][col])
+                row = random.randint(0,buffer_batchsize-1)
+                col = random.randint(0,int(60/offset)-1)
+                s.append(transition[row]['states'][col])
+                a.append(transition[row]['actions'][col])
+                r.append(transition[row]['rewards'][col])
+                s_next.append(transition[row]['next_states'][col])
+                done.append(transition[row]['dones'][col])
 
         return s, a, r, s_next, done
 
@@ -115,12 +111,14 @@ class PPO:
         with torch.no_grad():
             state = torch.flatten(state,start_dim=0).unsqueeze(0)
             mean, var = self.old_pi(state)
-            dis = Normal(mean, var)
-            a = dis.sample()
-        return a
+            action = Normal(mean, var)
+            action = action.sample()
+        return action
 
     
-    def update(self, transition, buffer_batchsize):
+    def update(self, transition, buffer_batchsize, episode, version_path):
+
+        entropy_list = []
         
         for epoch in tqdm(range(self.epochs)):
             states,  actions, rewards, next_states, dones = self.sample(transition, self.batchsize, buffer_batchsize, self.offset)
@@ -129,21 +127,21 @@ class PPO:
             next_states = torch.stack(next_states, dim=0).flatten(start_dim=1)
             rewards = torch.stack(rewards, dim=0).view(-1,1)
             dones = torch.stack(dones, dim=0).view(-1,1)
-            actions = torch.stack(actions, dim=0)
+            actions = torch.stack(actions, dim=0).flatten(start_dim=1)
 
             with torch.no_grad():
                 # td_error
-                next_state_value = self.value(next_states)
+                next_state_value = self.old_value(next_states)
                 td_target = rewards + self.gamma * next_state_value * (1-dones)
                 td_value = self.value(states)
-                td_delta = td_target - td_value
+                td_delta = rewards + self.gamma * self.value(next_states) * (1-dones) - td_value
         
                 # calculate GAE
                 advantage = 0
                 advantage_list = []
                 td_delta = td_delta.cpu().detach().numpy()
                 for delta in td_delta[::-1]:
-                    advantage = self.gamma * self.lamda * advantage + delta[0]
+                    advantage = self.gamma * self.lamda * advantage + delta
                     advantage_list.append(advantage)
                 advantage_list.reverse()
                 advantage = torch.tensor(advantage_list, dtype=torch.float).to(self.device).reshape(-1,1)
@@ -171,10 +169,14 @@ class PPO:
 
             total_loss = (pi_loss + value_loss - new_policy.entropy() * self.entropy_coef)
             # total_loss = pi_loss + value_loss
-            
+            entropy_list.append(new_policy.entropy().mean().item())
+
             self.optimizer.zero_grad()
-            total_loss.mean().requires_grad_(True).backward(retain_graph=True)
+            total_loss.mean().backward()
             self.optimizer.step()
 
-            if epoch % 10 == 0:
-                self.old_pi.load_state_dict(self.pi.state_dict())
+        if episode == 0 or (episode+1)%100==0:
+            vis_entropy(entropy_list, episode, version_path)
+
+        self.old_pi.load_state_dict(self.pi.state_dict())
+        self.old_value.load_state_dict(self.value.state_dict())

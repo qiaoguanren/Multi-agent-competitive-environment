@@ -14,8 +14,7 @@ from predictors.autoval import AntoQCNet
 from predictors.environment import WorldModel
 from transforms import TargetBuilder
 from pathlib import Path
-from visualization.vis import vis_reward
-from utils.geometry import wrap_angle
+from PPO.actor_BC import BC
 from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function
 from torch_geometric.data import Batch
 from tqdm import tqdm
@@ -25,14 +24,14 @@ pl.seed_everything(2023, workers=True)
 parser = ArgumentParser()
 parser.add_argument("--model", type=str, default="QCNet")
 parser.add_argument("--root", type=str, default="/home/guanren/Multi-agent-competitive-environment/datasets")
-parser.add_argument("--batch_size", type=int, default=32)
+parser.add_argument("--batch_size", type=int, default=1)
 parser.add_argument("--num_workers", type=int, default=8)
 parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
-parser.add_argument("--devices", type=int, default=2)
+parser.add_argument("--devices", type=int, default=1)
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
-parser.add_argument("--ppo_config", default="PPO_epoch100.yaml", type=str)
+parser.add_argument("--ppo_config", default="BC_epoch500.yaml", type=str)
 args = parser.parse_args("")
 
 model = {
@@ -80,52 +79,26 @@ new_input_data=add_new_agent(data)
 with open("configs/"+args.ppo_config, "r") as file:
         config = yaml.safe_load(file)
 file.close()
-BCmodel_state_dict = torch.load('checkpoints/BC_episodes=100_epochs=500.ckpt')
-
-max_epoch = 0
-base_path = 'figures/'
-if os.path.exists(base_path):
-    for folder in os.listdir(base_path):
-        if folder.startswith("version_"):
-            max_epoch+=1
-
-next_version_folder = f"version_{max_epoch + 1}/"
-next_version_path = os.path.join(base_path, next_version_folder)
-os.makedirs(next_version_path, exist_ok=True)
-
-cumulative_reward = [[] for _ in range(new_input_data['agent']['num_nodes'])]
 
 for episode in tqdm(range(config['episodes'])):
     offset=config['offset']
 
     transition_list = [{
                 'states': [],
-                'actions': [],
-                'next_states': [],
-                'rewards': [],
-                'dones': []} for _ in range(config['buffer_batchsize'])]
+                'actions': []
+                } for _ in range(config['buffer_batchsize'])]
         
     agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
-    agent = PPO(
-            state_dim=model.num_modes*config['hidden_dim'],
-            agent_index = agent_index,
-            hidden_dim = config['hidden_dim'],
-            action_dim = model.output_dim*offset,
-            batchsize = config['sample_batchsize'],
-            actor_learning_rate = config['actor_learning_rate'],
-            critic_learning_rate = config['critic_learning_rate'],
-            lamda = config['lamda'],
-            eps = config['eps'],
-            gamma = config['gamma'],
-            device = model.device,
-            agent_num = new_input_data['agent']['num_nodes'],
-            offset = offset,
-            entropy_coef=config['entropy_coef'],
-            epochs = config['epochs']
-    )
 
-    agent.pi.load_state_dict(BCmodel_state_dict['actor'])
-    agent.old_pi.load_state_dict(BCmodel_state_dict['actor'])
+    agent = BC(
+            state_dim=model.num_modes*config['hidden_dim'],
+            action_dim = model.output_dim*offset,
+            hidden_dim = config['hidden_dim'],
+            lr = config['actor_learning_rate'],
+            epochs = config['epochs'],
+            batchsize = config['sample_batchsize'],
+            offset = offset
+    )
 
     for batch in range(config['buffer_batchsize']):
         new_data=new_input_data.cuda().clone()
@@ -162,68 +135,37 @@ for episode in tqdm(range(config['episodes'])):
 
             true_trans_position_refine=new_true_trans_position_refine
             reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
-            
-            sample_action = agent.choose_action(state)
-            action = sample_action.flatten(start_dim = 1)
-            sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
+
+            # max_value = -1
+            # max_index = -1
+            # for k in range(6):
+            #     x = traj_propose[new_data["agent"]["category"] == 3, k, offset, 0].cpu()
+            #     y = traj_propose[new_data["agent"]["category"] == 3, k, offset, 1].cpu()
+            #     value = np.sqrt(x**2 + y**2)
+            #     if value > max_value:
+            #         max_value = value
+            #         max_index = k
 
             best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
-            l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
-                                sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[:offset].unsqueeze(0)).sum(dim=-1)
-            action_suggest_index=l2_norm.argmin(dim=-1)
-            best_mode[agent_index] = action_suggest_index
+            action = auto_pred["loc_refine_pos"][agent_index,best_mode[agent_index],:offset,:2]
+            action = action.flatten(start_dim = 1)
 
             new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                 new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
             )
 
             next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
-            with torch.no_grad():
-                transition_list[batch]['states'].append(state)
-                transition_list[batch]['actions'].append(action)
-                transition_list[batch]['next_states'].append(next_state)
-                if timestep == model.num_future_steps - offset:
-                    transition_list[batch]['dones'].append(torch.tensor(1).cuda())
-                else:
-                    transition_list[batch]['dones'].append(torch.tensor(0).cuda())
-                reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index)
-                transition_list[batch]['rewards'].append(reward.clone())
+            transition_list[batch]['states'].append(state)
+            transition_list[batch]['actions'].append(action)
             state = next_state
             
-    agent.update(transition_list, config['buffer_batchsize'], episode, next_version_path)
+    agent.train(transition_list, config['buffer_batchsize'])
 
-    discounted_return = 0
-    undiscounted_return = 0
-
-    for t in reversed(range(0, int(model.num_future_steps/offset))):
-        _sum = 0
-        for i in range(config['buffer_batchsize']):
-             _sum+=float(transition_list[i]['rewards'][t])
-        mean_reward = _sum/config['buffer_batchsize']
-        discounted_return = (config['gamma'] * discounted_return) + mean_reward
-        undiscounted_return += mean_reward
-
-    print(discounted_return, undiscounted_return)
-
-    cumulative_reward[agent_index].append(discounted_return)
-    cumulative_reward[agent_index+1].append(undiscounted_return)
-
-vis_reward(new_data,cumulative_reward,agent_index,config['episodes'],next_version_path)
-# vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
-
-pi_state_dict = agent.pi.state_dict()
-old_pi_state_dict = agent.old_pi.state_dict()
-old_value_state_dict = agent.old_value.state_dict()
-value_state_dict = agent.value.state_dict()
+pi_state_dict = agent.actor.state_dict()
 model_state_dict = {
-    'pi': pi_state_dict,
-    'old_pi': old_pi_state_dict,
-    'old_value': old_value_state_dict,
-    'value': value_state_dict
+    'actor': pi_state_dict,
 }
 
 base_path = 'checkpoints/'
-next_version_path = os.path.join(base_path, next_version_folder)
-os.makedirs(next_version_path, exist_ok=True)
-torch.save(model_state_dict, next_version_path+'PPO_episodes='+str(config['episodes'])+'_epochs='+str(config['epochs'])+'.ckpt')
+torch.save(model_state_dict, base_path+'BC_episodes='+str(config['episodes'])+'_epochs='+str(config['epochs'])+'.ckpt')
 

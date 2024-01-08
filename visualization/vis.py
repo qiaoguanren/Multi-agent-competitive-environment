@@ -415,7 +415,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                   if (110-i)%offset==0:
                       # true_trans_position_propose=new_true_trans_position_propose
                       true_trans_position_refine=new_true_trans_position_refine
-                      # print(traj_propose[new_data["agent"]["category"] == 3,:,offset,:2])
+                      print(traj_propose[new_data["agent"]["category"] == 3,:,offset,:2])
                       # max_value = -1
                       # max_index = -1
                       # for k in range(6):
@@ -426,7 +426,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                       #         max_value = value
                       #         max_index = k
 
-                      print(reward_function(new_input_data,new_data,model,agent_index))
+                    #   print(reward_function(new_input_data,new_data,model,agent_index))
                       # reg_mask = new_data['agent']['predict_mask'][:, model.num_historical_steps:]
                       # cls_mask = new_data['agent']['predict_mask'][:, -1]
                       # gt = torch.cat([data['agent']['target'][...,timestep:timestep+offset, :model.output_dim], data['agent']['target'][...,timestep:timestep+offset, -1:]], dim=-1)
@@ -488,5 +488,16 @@ def vis_reward(data,cumulative_reward,agent_index,episodes,version_path):
 
     current_time = datetime.now()
     timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-    full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'reward_{timestamp}.png'
+def vis_entropy(entropy_list, episode, version_path):
+    x = range(len(entropy_list))
+    plt.figure(figsize=(10, 10))
+    plt.plot(x, entropy_list, color='r', label=f'focal_agent',linewidth = 3)
+
+    plt.title('Actor Entropy')
+    plt.xlabel("Entropy")
+    plt.ylabel("Epoch")
+    plt.legend()
+
+    full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'entropy_{episode}.png'
     plt.savefig(full_path)
+    plt.close()
