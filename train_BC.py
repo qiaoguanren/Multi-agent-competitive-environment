@@ -5,7 +5,7 @@ import os
 import torch, math
 import yaml
 import numpy as np
-from PPO.mappo import PPO
+import torch.nn.functional as F
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
 from datasets import ArgoverseV2Dataset
@@ -15,7 +15,7 @@ from predictors.environment import WorldModel
 from transforms import TargetBuilder
 from pathlib import Path
 from PPO.actor_BC import BC
-from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function
+from utils.utils import get_transform_mat, get_auto_pred, add_new_agent,sample_from_pdf
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -49,7 +49,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a0ef009-9d44-4399-99e6-50004d345f34')]],
+    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -128,6 +128,9 @@ for episode in tqdm(range(config['episodes'])):
         ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
 
         init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
+        pi = pred['pi']
+        eval_mask = new_data['agent']['category'] == 3
+        pi_eval = F.softmax(pi[eval_mask], dim=-1)
 
         state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
 
@@ -144,9 +147,11 @@ for episode in tqdm(range(config['episodes'])):
             #     value = np.sqrt(x**2 + y**2)
             #     if value > max_value:
             #         max_value = value
-            #         max_index = k
+            #         max_index = k\
+            best_mode = [sample_from_pdf(pi_eval) for _ in range(new_input_data['agent']['num_nodes'])]
+            best_mode = torch.tensor(np.array(best_mode))
 
-            best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
+            # best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
             action = auto_pred["loc_refine_pos"][agent_index,best_mode[agent_index],:offset,:2]
             action = action.flatten(start_dim = 1)
 
@@ -158,6 +163,7 @@ for episode in tqdm(range(config['episodes'])):
             transition_list[batch]['states'].append(state)
             transition_list[batch]['actions'].append(action)
             state = next_state
+            pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
             
     agent.train(transition_list, config['buffer_batchsize'])
 

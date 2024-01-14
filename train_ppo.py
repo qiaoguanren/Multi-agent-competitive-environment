@@ -5,6 +5,7 @@ import os
 import torch, math
 import yaml
 import numpy as np
+import torch.nn.functional as F
 from PPO.mappo import PPO
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
@@ -16,7 +17,7 @@ from transforms import TargetBuilder
 from pathlib import Path
 from visualization.vis import vis_reward
 from utils.geometry import wrap_angle
-from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function
+from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -30,9 +31,9 @@ parser.add_argument("--num_workers", type=int, default=8)
 parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
-parser.add_argument("--devices", type=int, default=2)
+parser.add_argument("--devices", type=int, default=1)
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
-parser.add_argument("--ppo_config", default="PPO_epoch100.yaml", type=str)
+parser.add_argument("--ppo_config", default="PPO_episode500_epoch20.yaml", type=str)
 args = parser.parse_args("")
 
 model = {
@@ -50,7 +51,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a0ef009-9d44-4399-99e6-50004d345f34')]],
+    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -80,7 +81,7 @@ new_input_data=add_new_agent(data)
 with open("configs/"+args.ppo_config, "r") as file:
         config = yaml.safe_load(file)
 file.close()
-BCmodel_state_dict = torch.load('checkpoints/BC_episodes=100_epochs=500.ckpt')
+BCmodel_state_dict = torch.load('checkpoints/BC_episodes=100_epochs=500_2.ckpt')
 
 max_epoch = 0
 base_path = 'figures/'
@@ -155,6 +156,9 @@ for episode in tqdm(range(config['episodes'])):
         ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
 
         init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
+        pi = pred['pi']
+        eval_mask = new_data['agent']['category'] == 3
+        pi_eval = F.softmax(pi[eval_mask], dim=-1)
 
         state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
 
@@ -164,21 +168,25 @@ for episode in tqdm(range(config['episodes'])):
             reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
             
             sample_action = agent.choose_action(state)
-            action = sample_action.flatten(start_dim = 1)
             sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
 
-            best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
+            # best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
+            best_mode = [sample_from_pdf(pi_eval) for _ in range(new_input_data['agent']['num_nodes'])]
+            best_mode = torch.tensor(np.array(best_mode))
             l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
-                                sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[:offset].unsqueeze(0)).sum(dim=-1)
+                                sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
             action_suggest_index=l2_norm.argmin(dim=-1)
+            # if batch == 30:
+            #      print(action_suggest_index)
             best_mode[agent_index] = action_suggest_index
 
+            action = auto_pred['loc_refine_pos'][agent_index,action_suggest_index,:offset, :2].flatten(start_dim = 1)
             new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                 new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
             )
 
-            next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
             with torch.no_grad():
+                next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
                 transition_list[batch]['states'].append(state)
                 transition_list[batch]['actions'].append(action)
                 transition_list[batch]['next_states'].append(next_state)
@@ -186,9 +194,11 @@ for episode in tqdm(range(config['episodes'])):
                     transition_list[batch]['dones'].append(torch.tensor(1).cuda())
                 else:
                     transition_list[batch]['dones'].append(torch.tensor(0).cuda())
-                reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index)
-                transition_list[batch]['rewards'].append(reward.clone())
+                reward = reward_function(new_input_data.clone(),new_data.clone(),model,agent_index)
+                transition_list[batch]['rewards'].append(torch.tensor([reward]).cuda())
+                     
             state = next_state
+            pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
             
     agent.update(transition_list, config['buffer_batchsize'], episode, next_version_path)
 
@@ -206,19 +216,18 @@ for episode in tqdm(range(config['episodes'])):
     print(discounted_return, undiscounted_return)
 
     cumulative_reward[agent_index].append(discounted_return)
-    cumulative_reward[agent_index+1].append(undiscounted_return)
 
 vis_reward(new_data,cumulative_reward,agent_index,config['episodes'],next_version_path)
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
 pi_state_dict = agent.pi.state_dict()
 old_pi_state_dict = agent.old_pi.state_dict()
-old_value_state_dict = agent.old_value.state_dict()
+# old_value_state_dict = agent.old_value.state_dict()
 value_state_dict = agent.value.state_dict()
 model_state_dict = {
     'pi': pi_state_dict,
     'old_pi': old_pi_state_dict,
-    'old_value': old_value_state_dict,
+    # 'old_value': old_value_state_dict,
     'value': value_state_dict
 }
 

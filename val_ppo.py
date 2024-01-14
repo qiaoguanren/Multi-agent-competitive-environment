@@ -3,8 +3,10 @@ import cv2
 import matplotlib.pyplot as plt
 import io
 import torch, math
+import random
 import yaml
 import numpy as np
+import torch.nn.functional as F
 from PPO.mappo import PPO
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
@@ -23,7 +25,7 @@ from av2.map.map_api import ArgoverseStaticMap
 from pathlib import Path
 from visualization.vis import vis_reward, generate_video, plot_traj_with_data
 from utils.geometry import wrap_angle
-from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function
+from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf
 from torch_geometric.data import Batch
 from PIL import Image as img
 from tqdm import tqdm
@@ -58,7 +60,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a0ef009-9d44-4399-99e6-50004d345f34')]],
+    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -93,24 +95,17 @@ new_input_data=add_new_agent(data)
 current_time = datetime.now()
 timestamp = current_time.strftime("%Y%m%d_%H%M%S")
 vid_path = f'videos/test_ppo_{timestamp}.webm'
-with open("configs/PPO_epoch100.yaml", "r") as file:
+with open("configs/PPO_epoch50.yaml", "r") as file:
         config = yaml.safe_load(file)
 file.close()
 
-model_state_dict = torch.load('checkpoints/version_4/PPO_episodes=500_epochs=100.ckpt')
+model_state_dict = torch.load('checkpoints/version_5/PPO_episodes=500_epochs=10.ckpt')
 
-episodes = 10
+episodes = config['episodes']
 
 with torch.no_grad():
     for episode in tqdm(range(episodes)):
         offset=config['offset']
-
-        transition_list = [{
-                'states': [],
-                'actions': [],
-                'next_states': [],
-                'rewards': [],
-                'dones': []} for _ in range(config['buffer_batchsize'])]
 
         agent_index = torch.nonzero(new_input_data['agent']['category']==3,as_tuple=False).item()
                 
@@ -118,7 +113,7 @@ with torch.no_grad():
             state_dim=model.num_modes*config['hidden_dim'],
             agent_index = agent_index,
             hidden_dim = config['hidden_dim'],
-            action_dim = model.output_dim+1,
+            action_dim = model.output_dim*offset,
             batchsize = config['sample_batchsize'],
             actor_learning_rate = config['actor_learning_rate'],
             critic_learning_rate = config['critic_learning_rate'],
@@ -133,88 +128,116 @@ with torch.no_grad():
         )
         agent.pi.load_state_dict(model_state_dict['pi'])
         agent.old_pi.load_state_dict(model_state_dict['old_pi'])
+        agent.old_value.load_state_dict(model_state_dict['old_value'])
         agent.value.load_state_dict(model_state_dict['value'])
-        for batch in range(config['buffer_batchsize']):
-            new_data=new_input_data.cuda().clone()
 
-            pred = model(new_data)
-            if model.output_head:
-                traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
-                                        pred['loc_propose_head'],
-                                        pred['scale_propose_pos'][..., :model.output_dim],
-                                        pred['conc_propose_head']], dim=-1)
-                traj_refine = torch.cat([pred['loc_refine_pos'][..., :model.output_dim],
-                                        pred['loc_refine_head'],
-                                        pred['scale_refine_pos'][..., :model.output_dim],
-                                        pred['conc_refine_head']], dim=-1)
-            else:
-                traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
-                                        pred['scale_propose_pos'][..., :model.output_dim]], dim=-1)
-                traj_refine = torch.cat([pred['loc_refine_pos'][..., :model.output_dim],
-                                        pred['scale_refine_pos'][..., :model.output_dim]], dim=-1)
+        new_data=new_input_data.cuda().clone()
 
-            auto_pred=pred
-            origin,theta,rot_mat=get_transform_mat(new_data,model)
-            new_true_trans_position_refine = torch.einsum(
-                "bijk,bkn->bijn",
-                pred["loc_refine_pos"][..., : model.output_dim],
-                rot_mat.swapaxes(-1, -2),
-            ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
-            init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
-            frames = []
-            state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
-            for i in range(40,110):
-                  if i<50:
-                      if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
-                          plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=i)
+        pred = model(new_data)
+        if model.output_head:
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
+                                    pred['loc_propose_head'],
+                                    pred['scale_propose_pos'][..., :model.output_dim],
+                                    pred['conc_propose_head']], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :model.output_dim],
+                                    pred['loc_refine_head'],
+                                    pred['scale_refine_pos'][..., :model.output_dim],
+                                    pred['conc_refine_head']], dim=-1)
+        else:
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
+                                    pred['scale_propose_pos'][..., :model.output_dim]], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :model.output_dim],
+                                    pred['scale_refine_pos'][..., :model.output_dim]], dim=-1)
+
+        auto_pred=pred
+        origin,theta,rot_mat=get_transform_mat(new_data,model)
+        new_true_trans_position_refine = torch.einsum(
+            "bijk,bkn->bijn",
+            pred["loc_refine_pos"][..., : model.output_dim],
+            rot_mat.swapaxes(-1, -2),
+        ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
+        init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
+        frames = []
+        pi = pred['pi']
+        eval_mask = new_data['agent']['category'] == 3
+        pi_eval = F.softmax(pi[eval_mask], dim=-1)
+        state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
+        for i in range(40,110):
+              if i<50:
+                  if episode == episodes - 1:
+                      plot_traj_with_data(new_data,scenario_static_map,bounds=80,t=i)
+              else:
+                  if i%offset==0:
+                      true_trans_position_refine=new_true_trans_position_refine
+                      reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
+                      
+                      sample_action = agent.choose_action(state)
+
+                      # best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
+                      # best_mode=torch.cat([best_mode,torch.tensor([3])], dim=-1)
+                      best_mode = [sample_from_pdf(pi_eval) for _ in range(new_data['agent']['num_nodes'])]
+                      # best_mode.append(3)
+                      # best_mode[-1] = 4
+                      best_mode = torch.tensor(np.array(best_mode))
+                      l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
+                                          sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[i-model.num_historical_steps:i-model.num_historical_steps+offset].unsqueeze(0)).sum(dim=-1)
+                      action_suggest_index=l2_norm.argmin(dim=-1)
+                      print(action_suggest_index)
+                      best_mode[agent_index]=action_suggest_index
+                      new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
+                          new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
+                      )
+                      next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
+                      state = next_state
+
+                      
+                      # temp = new_data.clone()
+
+                      # print(episode)
+
+                      # for k in range(6):
+                      #     print(math.sqrt(auto_pred['loc_refine_pos'][agent_index,k,offset-1, 0]**2+auto_pred['loc_refine_pos'][agent_index,k,offset-1, 1]**2))
+
+                      #     best_mode[agent_index] = k
+                      #     temp2, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
+                      #         temp, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
+                      #     )
+
+                      #     if k == action_suggest_index:
+
+                      #       new_data = temp2
+
+
+                      # # new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
+                      # #     new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
+                      # # )
+
+                      #       next_state = environment.decoder(temp2, environment.encoder(temp2))[agent_index]
+                      #       state = next_state
+                      #       print(agent.value(next_state.flatten(start_dim=0).unsqueeze(0)))
+                      #     else:
+                      #       next_state = environment.decoder(temp2, environment.encoder(temp2))[agent_index]
+                      #       print(agent.value(next_state.flatten(start_dim=0).unsqueeze(0)))
+                      pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
+                      if episode == episodes - 1:
+                          plot_traj_with_data(new_data,scenario_static_map,bounds=80,t=50-offset)
+                          for j in range(6):
+                            xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                            plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                   else:
-                      if i%offset==0:
-                          true_trans_position_refine=new_true_trans_position_refine
-                          reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
-                          
-                          sample_action = agent.choose_action(state)
+                      if episode == episodes - 1:
+                          plot_traj_with_data(new_data,scenario_static_map,bounds=80,t=50-offset+i%offset)
+                          for j in range(6):
+                            xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                            plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
 
-                          best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
-                          l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
-                                              sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[:offset].unsqueeze(0)).sum(dim=-1)
-                          action_suggest_index=l2_norm.argmin(dim=-1)
-                          print(action_suggest_index)
-                          best_mode[agent_index] = action_suggest_index
+              buf = io.BytesIO()
+              plt.savefig(buf, format="png")
+              plt.close()
+              buf.seek(0)
+              frame = img.open(buf)
+              frames.append(frame)
 
-                          new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
-                              new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
-                          )
-
-                          next_state = environment.decoder(new_data, environment.encoder(new_data))[agent_index].detach()
-                          transition_list[batch]['states'].append(state)
-                          transition_list[batch]['actions'].append(sample_action)
-                          transition_list[batch]['next_states'].append(next_state)
-                          if i == model.num_future_steps + model.num_historical_steps - offset:
-                              transition_list[batch]['dones'].append(torch.tensor(1).cuda())
-                          else:
-                              transition_list[batch]['dones'].append(torch.tensor(0).cuda())
-                          reward = reward_function(new_input_data.clone(), new_data.clone(), model, agent_index)
-                          transition_list[batch]['rewards'].append(reward.clone())
-                          state = next_state
-                          if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
-                              plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset)
-                              for j in range(6):
-                                xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                                plt.plot(xy[j, ..., 0], xy[j, ..., 1])
-                      else:
-                          if episode == episodes - 1 and batch == config['buffer_batchsize']-1:
-                              plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+i%offset)
-                              for j in range(6):
-                                xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                                plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
-
-                  buf = io.BytesIO()
-                  plt.savefig(buf, format="png")
-                  plt.close()
-                  buf.seek(0)
-                  frame = img.open(buf)
-                  frames.append(frame)
-        agent.update(transition_list, agent_index)
     fourcc = cv2.VideoWriter_fourcc(*"VP80")
     video = cv2.VideoWriter(vid_path, fourcc, fps=10, frameSize=frames[0].size)
     for i in range(len(frames)):

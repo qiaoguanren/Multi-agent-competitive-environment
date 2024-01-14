@@ -145,20 +145,26 @@ def get_auto_pred(input_data, model, loc_refine_pos, loc_refine_head, offset, an
     )
 
 def add_new_agent(data):
-    acceleration = 0.3
+    acceleration = 1.2
     arr_s_x = np.array([])
     arr_s_y = np.array([])
     arr_v_x = np.array([])
     arr_v_y = np.array([])
-    v0_x = 5*math.cos(data['agent']['heading'][data['agent']['category']==3][0,50])
-    v0_y = math.sqrt(25-v0_x**2)
+    v0_x = 1*math.cos(1.23)
+    v0_y = math.sqrt(1-v0_x**2)
     t = 0.1
-    x0 = x = 5259.7
-    y0 = y = 318
+    # x0 = x = 5259.7
+    # y0 = y = 318
+    # x0 = x = 8945
+    # y0 = y = 4577.5
+    x0 = x = 2665
+    y0 = y = -2410
     v_x = 0
     v_y = 0
     new_heading=torch.empty_like(data['agent']['heading'][0])
-    new_heading[:]=1.9338
+    # new_heading[:]=1.9338
+    # new_heading[:]=0.3898
+    new_heading[:]=1.19
 
     for i in range(110):
         a_x = acceleration*math.cos(new_heading[i])
@@ -208,50 +214,44 @@ def reward_function(data,new_data,model,agent_index):
         # gt[0,0] = 5283
         # gt[0,1] = 306
         current_position = new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
-        pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
+        # pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
 
         # delta_distance = gt-current_position
-        # l2_norm_current_distance = torch.norm(gt - current_position, p=2, dim=-1)
+        l2_norm_current_distance = torch.norm(current_position - gt, p=2, dim=-1)
         # l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
         total_distance = torch.norm(gt - start_point, p=2, dim=-1)
         travel_distance = torch.norm(current_position - start_point, p=2, dim=-1)
-        # if delta_distance[0,0]<=0 and delta_distance[0,1]>=0 and l2_norm_current_distance<l2_norm_pre_distance:
-        #     reward1 = torch.clip(50/l2_norm_current_distance, 1, 50).item()
-        # elif delta_distance[0,0]<=0 and delta_distance[0,1]>=0 and l2_norm_current_distance>=l2_norm_pre_distance:
-        #     reward1 = -50
-        # elif delta_distance[0,0]>=0 and delta_distance[0,1]<=0:
-        #     reward1 = 100
-        reward1 = 100*travel_distance/total_distance
-
-        # for i in range(data['agent']['num_nodes']):
-        #     if i==agent_index:
-        #         continue
-        #     distance = torch.norm(data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],dim=-1)
-        #     if distance < 1e-1:
-        #          break
-        # if distance < 1e-1:
-        #     reward2 = -100
-        # left_bound = []
-        # right_bound = []
-        # for i in range(len(data['map_point']['side'])):
-        #     if data['map_point']['side'][i] == 0:
-        #         left_bound.append(tuple(data['map_point']['position'][i,:2]))
-        #     if data['map_point']['side'][i] == 1:
-        #         right_bound.append(tuple(data['map_point']['position'][i,:2]))
-        # left_polygon = LineString(left_bound)
-        # right_polygon = LineString(right_bound)
-        # car_point = Point(tuple(data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim].flatten().cpu().numpy()))
-        # nearest_left = nearest_points(left_polygon, car_point)[0]
-        # nearest_right = nearest_points(right_polygon, car_point)[0]
-        # distance_to_nearest_left = car_point.distance(nearest_left)
-        # distance_to_nearest_right = car_point.distance(nearest_right)
-        # lane_width = nearest_left.distance(nearest_right)
-        # if distance_to_nearest_left + distance_to_nearest_right > lane_width:
-        #     reward3 = -50
-
-        # total_reward = np.array([reward1, reward2, reward3])
-        # mean_reward = np.mean(total_reward)
-        # std_reward = np.std(total_reward)    
-        # normalized_reward = (total_reward - mean_reward) / std_reward
-        # return float(np.sum(normalized_reward))
+        if travel_distance<total_distance:
+            reward1 = math.log(travel_distance/total_distance)
+        else:
+            reward1 = l2_norm_current_distance**2*2
+        # max_index = 0
+        # min_index = 99999
+        # max_value = 0
+        # min_value = 99999
+        # for k in range(6):
+        #     x = auto_pred["loc_refine_pos"][agent_index, k, offset-1, 0].cpu()
+        #     y = auto_pred["loc_refine_pos"][agent_index, k, offset-1, 1].cpu()
+        #     value = np.sqrt(x**2 + y**2)
+        #     if value > max_value:
+        #         max_value = value
+        #         max_index = k
+        #     if value < min_value:
+        #         min_value = value
+        #         min_index = k
+        
+        # if max_index == sample_action:
+        #     reward2 = 50
+        # elif sample_action == min_index:
+        #     reward2 = -50
+        # else:
+        #     reward2 = -10
+        
         return reward1+reward2+reward3
+
+def sample_from_pdf(pdf):
+    pdf_distribution = torch.softmax(pdf, dim=-1)
+    
+    sampled_value = torch.multinomial(pdf_distribution, num_samples=1)
+    
+    return sampled_value.item()

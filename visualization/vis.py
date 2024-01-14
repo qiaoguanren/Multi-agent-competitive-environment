@@ -6,6 +6,7 @@ import cv2
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
+import torch.nn.functional as F
 from PIL import Image as img
 from typing import Final
 from random import choices
@@ -16,7 +17,7 @@ from av2.datasets.motion_forecasting.data_schema import (
     TrackCategory,
 )
 from datetime import datetime
-from utils.utils import get_auto_pred, get_transform_mat, reward_function
+from utils.utils import get_auto_pred, get_transform_mat, sample_from_pdf
 
 
 _DRIVABLE_AREA_COLOR: Final[str] = "#7A7A7A"
@@ -374,12 +375,16 @@ def plot_traj_with_data(data,scenario_static_map,t=50,bounds=80.0):
         plot_bounds = cur_plot_bounds
         # print(plot_bounds)
     plt.xlim(
-        5256 - bounds,
-        5265 + bounds,
+        # 5256 - bounds,
+        # 5265 + bounds,
+        plot_bounds[0] - bounds,
+        plot_bounds[1] + bounds,
     )
     plt.ylim(
-        295 - bounds,
-        330 + bounds,
+        # 295 - bounds,
+        # 330 + bounds,
+        plot_bounds[2] - bounds,
+        plot_bounds[3] + bounds,
     )
     plt.gca().set_aspect("equal", adjustable="box")
     plt.gca().set_axis_off()
@@ -407,15 +412,18 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
           auto_pred=pred
           init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
           agent_index = torch.nonzero(new_input_data['agent']['category']==3,as_tuple=False).item()
+          pi = pred['pi']
+          eval_mask = new_data['agent']['category'] == 3
+          pi_eval = F.softmax(pi[eval_mask], dim=-1)
 
-          for i in range(40,110):
+          for i in range(0,110):
               if i<50:
-                  plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=i)
+                  plot_traj_with_data(new_data,scenario_static_map,bounds=60,t=i)
               else:
                   if (110-i)%offset==0:
                       # true_trans_position_propose=new_true_trans_position_propose
                       true_trans_position_refine=new_true_trans_position_refine
-                      print(traj_propose[new_data["agent"]["category"] == 3,:,offset,:2])
+                      # print(traj_propose[new_data["agent"]["category"] == 3,:,offset,:2])
                       # max_value = -1
                       # max_index = -1
                       # for k in range(6):
@@ -433,17 +441,21 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                       # l2_norm = (torch.norm(traj_propose[:-1,...,:offset, :model.output_dim] -
                       #                     gt[..., :model.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask[:-1,...,:offset].unsqueeze(1)).sum(dim=-1)
                       # best_mode = l2_norm.argmin(dim=-1)
-                      best_mode=torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
+                      # best_mode=torch.randint(6,size=(new_data['agent']['num_nodes'],))
+                      best_mode = [sample_from_pdf(pi_eval) for _ in range(new_data['agent']['num_nodes'])]
                       # best_mode[new_data["agent"]["category"] == 3] = max_index
+                      # best_mode[-1] = 4
+                      # best_mode[agent_index]=5
                       new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                           new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0], offset,anchor=(init_origin,init_theta,init_rot_mat)
                       )
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset)
+                      pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
+                      plot_traj_with_data(new_data,scenario_static_map,bounds=60,t=50-offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                   else:
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=50,t=50-offset+(i-50)%offset)
+                      plot_traj_with_data(new_data,scenario_static_map,bounds=60,t=50-offset+(i-50)%offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, (i-50)%offset:, 0], xy[j, (i-50)%offset:, 1])
@@ -498,8 +510,8 @@ def vis_entropy(entropy_list, episode, version_path):
     plt.plot(x, entropy_list, color='r', label=f'focal_agent',linewidth = 3)
 
     plt.title('Actor Entropy')
-    plt.xlabel("Entropy")
-    plt.ylabel("Epoch")
+    plt.xlabel("Epoch")
+    plt.ylabel("Entropy")
     plt.legend()
 
     full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'entropy_{episode}.png'

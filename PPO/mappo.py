@@ -8,7 +8,7 @@ from tqdm import tqdm
 from visualization.vis import vis_entropy
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+def layer_init(layer, std=np.sqrt(2), bias_const=1.0):
         torch.nn.init.orthogonal_(layer.weight, std)
         torch.nn.init.constant_(layer.bias, bias_const)
         return layer
@@ -26,7 +26,7 @@ class Policy(nn.Module):
     def forward(self, state):
 
         mean = self.f(state)
-        var = F.sigmoid(self.f(state)) + 1e-8
+        var = F.softplus(self.f(state)) + 1e-8
         return mean, var
     
 class ValueNet(nn.Module):
@@ -36,11 +36,9 @@ class ValueNet(nn.Module):
             layer_init(nn.Linear(state_dim, hidden_dim)),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
-            layer_init(nn.Linear(hidden_dim, hidden_dim//2)),
-            nn.LayerNorm(hidden_dim//2),
-            nn.ReLU(inplace=True),
-            layer_init(nn.Linear(hidden_dim//2, 1)),
-        )
+            layer_init(nn.Linear(hidden_dim, 1)),
+
+        )# two-layer MLP
 
     def forward(self, states):
 
@@ -50,7 +48,7 @@ class ValueNet(nn.Module):
 class PPO:
     def __init__(self, 
                  state_dim: int, 
-                 agent_index: int, 
+                 agent_index: int,
                  hidden_dim: int,
                  action_dim: int,
                  batchsize: int,
@@ -67,7 +65,7 @@ class PPO:
         self.pi = Policy(state_dim, hidden_dim, action_dim).to(device)
         self.old_pi = Policy(state_dim, hidden_dim, action_dim).to(device)
         self.value = ValueNet(state_dim, hidden_dim).to(device)
-        self.old_value = ValueNet(state_dim, hidden_dim).to(device)
+        # self.old_value = ValueNet(state_dim, hidden_dim).to(device)
         self.batchsize = batchsize
         self.actor_lr = actor_learning_rate
         self.critic_lr = critic_learning_rate
@@ -113,6 +111,8 @@ class PPO:
             mean, var = self.old_pi(state)
             action = Normal(mean, var)
             action = action.sample()
+            # samples = Normal(mean, var).sample((10,))
+            # action = samples.max(dim=0)[0]
         return action
 
     
@@ -121,62 +121,67 @@ class PPO:
         entropy_list = []
         
         for epoch in tqdm(range(self.epochs)):
-            states,  actions, rewards, next_states, dones = self.sample(transition, self.batchsize, buffer_batchsize, self.offset)
 
+            states,  actions, rewards, next_states, dones= self.sample(transition, self.batchsize, buffer_batchsize, self.offset)
             states = torch.stack(states, dim=0).flatten(start_dim=1)
             next_states = torch.stack(next_states, dim=0).flatten(start_dim=1)
             rewards = torch.stack(rewards, dim=0).view(-1,1)
             dones = torch.stack(dones, dim=0).view(-1,1)
             actions = torch.stack(actions, dim=0).flatten(start_dim=1)
 
-            with torch.no_grad():
-                # td_error
-                next_state_value = self.old_value(next_states)
-                td_target = rewards + self.gamma * next_state_value * (1-dones)
-                td_value = self.value(states)
-                td_delta = rewards + self.gamma * self.value(next_states) * (1-dones) - td_value
-        
-                # calculate GAE
-                advantage = 0
-                advantage_list = []
-                td_delta = td_delta.cpu().detach().numpy()
-                for delta in td_delta[::-1]:
-                    advantage = self.gamma * self.lamda * advantage + delta
-                    advantage_list.append(advantage)
-                advantage_list.reverse()
-                advantage = torch.tensor(advantage_list, dtype=torch.float).to(self.device).reshape(-1,1)
-                #advantage_normalization
-                advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
-        
-                # get ratio
-                mean, var = self.old_pi(states)
-                old_policy = Normal(mean, var)
-                old_log_probs = old_policy.log_prob(actions)
-
-            mean, var = self.pi(states)
-            new_policy = Normal(mean, var)
-            log_probs = new_policy.log_prob(actions)
-            ratio = torch.exp(log_probs - old_log_probs)
-    
-            # clipping
-            ratio = ratio.flatten(start_dim=1)
-            surr1 = ratio * advantage
-            surr2 = advantage * torch.clamp(ratio, 1-self.eps, 1+self.eps)
+            for iteration in range(50):
+                with torch.no_grad():
+                    # td_error
+                    next_state_value = self.value(next_states)
+                    td_target = rewards + self.gamma * next_state_value * (1-dones)
+                    td_value = self.value(states)
+                    td_delta = td_value - td_value
             
-            # pi and value loss
-            pi_loss = torch.mean(-torch.min(surr1, surr2))
-            value_loss = torch.mean(F.mse_loss(self.value(states), td_target.detach()))
+                    # calculate GAE
+                    advantage = 0
+                    advantage_list = []
+                    td_delta = td_delta.cpu().detach().numpy()
+                    for delta in td_delta[::-1]:
+                        advantage = self.gamma * self.lamda * advantage + delta
+                        advantage_list.append(advantage)
+                    advantage_list.reverse()
+                    advantage = torch.tensor(np.array(advantage_list), dtype=torch.float).to(self.device).reshape(-1,1)
+                    #advantage_normalization
+                    advantage = (advantage - advantage.mean()) / (advantage.std() + 1e-8)
+            
+                    # get ratio
+                    mean, var = self.old_pi(states)
+                    old_policy = Normal(mean, var)
+                    old_log_probs = old_policy.log_prob(actions)
 
-            total_loss = (pi_loss + value_loss - new_policy.entropy() * self.entropy_coef)
-            # total_loss = pi_loss + value_loss
-            entropy_list.append(new_policy.entropy().mean().item())
+                mean, var = self.pi(states)
+                new_policy = Normal(mean, var)
+                log_probs = new_policy.log_prob(actions)
+                ratio = torch.exp(log_probs - old_log_probs)
+        
+                # clipping
+                ratio = ratio.flatten(start_dim=1)
+                surr1 = ratio * advantage
+                surr2 = advantage * torch.clamp(ratio, 1-self.eps, 1+self.eps)
+                
+                # pi and value loss
+                pi_loss = torch.mean(-torch.min(surr1, surr2))
+                value_loss = torch.mean(F.mse_loss(self.value(states), td_target.detach()))
 
-            self.optimizer.zero_grad()
-            total_loss.mean().backward()
-            self.optimizer.step()
+                total_loss = (pi_loss + value_loss - new_policy.entropy() * self.entropy_coef - new_policy.sample() * 0.005)
+                # total_loss = pi_loss + value_loss
+                entropy_list.append(new_policy.entropy().mean().item())
 
-        if episode == 0 or (episode+1)%100==0:
-            vis_entropy(entropy_list, episode, version_path)
+                self.optimizer.zero_grad()
+                total_loss.mean().backward()
+                self.optimizer.step()
 
-        self.old_pi.load_state_dict(self.pi.state_dict())
-        self.old_value.load_state_dict(self.value.state_dict())
+            # if epoch%10 == 0:
+            self.old_pi.load_state_dict(self.pi.state_dict())
+            # self.old_value.load_state_dict(self.value.state_dict())
+
+        if (episode+1)%100==0:
+            if version_path:
+                vis_entropy(entropy_list, episode, version_path)
+
+        
