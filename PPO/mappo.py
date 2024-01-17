@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from torch.distributions import Normal
 import numpy as np
 from tqdm import tqdm
+from utils import VAE
 from visualization.vis import vis_entropy
 
 
@@ -54,6 +55,9 @@ class PPO:
                  batchsize: int,
                  actor_learning_rate: float,
                  critic_learning_rate: float,
+                 density_learning_rate: float,
+                 kld_weight: float,
+                 beta_coef: float,
                  lamda: float,
                  eps: float, 
                  gamma: float, 
@@ -65,10 +69,13 @@ class PPO:
         self.pi = Policy(state_dim, hidden_dim, action_dim).to(device)
         self.old_pi = Policy(state_dim, hidden_dim, action_dim).to(device)
         self.value = ValueNet(state_dim, hidden_dim).to(device)
+        self.vae = VAE(state_dim, hidden_dim//4).to(device)
         # self.old_value = ValueNet(state_dim, hidden_dim).to(device)
         self.batchsize = batchsize
         self.actor_lr = actor_learning_rate
         self.critic_lr = critic_learning_rate
+        self.kld_weight = kld_weight
+        self.beta_coef = beta_coef
         self.lamda = lamda #discount factor
         self.eps = eps #clipping parameter
         self.gamma = gamma # the factor of caculating GAE
@@ -79,6 +86,7 @@ class PPO:
         self.entropy_coef = entropy_coef
         self.epochs = epochs
 
+        self.density_optimizer = torch.optim.Adam(self.vae.parameters(), lr=density_learning_rate)
         self.optimizer = torch.optim.AdamW([
                         {'params': self.pi.parameters(), 'lr': self.actor_lr},
                         {'params': self.value.parameters(), 'lr': self.critic_lr}
@@ -133,13 +141,23 @@ class PPO:
             rewards = torch.stack(rewards, dim=0).view(-1,1)
             dones = torch.stack(dones, dim=0).view(-1,1)
             actions = torch.stack(actions, dim=0).flatten(start_dim=1)
-                
+
+            density, output_t, mu, logvar = self.vae(next_states)
+            density_loss = self.vae.loss_function(next_states, output_t, mu, logvar, self.kld_weight)
+            self.density_optimizer.zero_grad()
+            density_loss.mean().backward()
+            self.density_optimizer.step()
+
+            beta_t = self.beta_coef / density
+            
             # td_error
             with torch.no_grad():
                 next_state_value = self.value(next_states)
+                
                 td_target = rewards + self.gamma * next_state_value * (1-dones)
+                td_target = td_target + beta_t
                 td_value = self.value(states)
-                td_delta = td_value - td_value
+                td_delta = td_target - td_value
             
                 # calculate GAE
                 advantage = 0
