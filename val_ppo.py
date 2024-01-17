@@ -99,12 +99,13 @@ with open("configs/PPO_epoch50.yaml", "r") as file:
         config = yaml.safe_load(file)
 file.close()
 
-model_state_dict = torch.load('checkpoints/version_5/PPO_episodes=500_epochs=10.ckpt')
+model_state_dict = torch.load('checkpoints/version_6/PPO_episodes=500_epochs=20.ckpt')
 
 episodes = config['episodes']
 
 with torch.no_grad():
     for episode in tqdm(range(episodes)):
+        scale = 1/episodes
         offset=config['offset']
 
         agent_index = torch.nonzero(new_input_data['agent']['category']==3,as_tuple=False).item()
@@ -128,7 +129,7 @@ with torch.no_grad():
         )
         agent.pi.load_state_dict(model_state_dict['pi'])
         agent.old_pi.load_state_dict(model_state_dict['old_pi'])
-        agent.old_value.load_state_dict(model_state_dict['old_value'])
+        # agent.old_value.load_state_dict(model_state_dict['old_value'])
         agent.value.load_state_dict(model_state_dict['value'])
 
         new_data=new_input_data.cuda().clone()
@@ -159,8 +160,7 @@ with torch.no_grad():
         init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
         frames = []
         pi = pred['pi']
-        eval_mask = new_data['agent']['category'] == 3
-        pi_eval = F.softmax(pi[eval_mask], dim=-1)
+        pi_eval = F.softmax(pi, dim=-1)
         state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
         for i in range(40,110):
               if i<50:
@@ -171,12 +171,10 @@ with torch.no_grad():
                       true_trans_position_refine=new_true_trans_position_refine
                       reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
                       
-                      sample_action = agent.choose_action(state)
+                      sample_action = agent.choose_action(state, scale)
 
                       # best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
-                      # best_mode=torch.cat([best_mode,torch.tensor([3])], dim=-1)
-                      best_mode = [sample_from_pdf(pi_eval) for _ in range(new_data['agent']['num_nodes'])]
-                      # best_mode.append(3)
+                      best_mode = pi_eval.argmax(dim=-1)
                       # best_mode[-1] = 4
                       best_mode = torch.tensor(np.array(best_mode))
                       l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
@@ -218,7 +216,7 @@ with torch.no_grad():
                       #     else:
                       #       next_state = environment.decoder(temp2, environment.encoder(temp2))[agent_index]
                       #       print(agent.value(next_state.flatten(start_dim=0).unsqueeze(0)))
-                      pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
+                      pi_eval = F.softmax(auto_pred['pi'], dim=-1)
                       if episode == episodes - 1:
                           plot_traj_with_data(new_data,scenario_static_map,bounds=80,t=50-offset)
                           for j in range(6):

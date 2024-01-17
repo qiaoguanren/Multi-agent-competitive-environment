@@ -17,7 +17,7 @@ from transforms import TargetBuilder
 from pathlib import Path
 from visualization.vis import vis_reward
 from utils.geometry import wrap_angle
-from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf
+from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf, create_dir
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -83,21 +83,12 @@ with open("configs/"+args.ppo_config, "r") as file:
 file.close()
 BCmodel_state_dict = torch.load('checkpoints/BC_episodes=100_epochs=500_2.ckpt')
 
-max_epoch = 0
-base_path = 'figures/'
-if os.path.exists(base_path):
-    for folder in os.listdir(base_path):
-        if folder.startswith("version_"):
-            max_epoch+=1
-
-next_version_folder = f"version_{max_epoch + 1}/"
-next_version_path = os.path.join(base_path, next_version_folder)
-os.makedirs(next_version_path, exist_ok=True)
-
+next_version_path = create_dir(base_path = 'figures/')
 cumulative_reward = [[] for _ in range(new_input_data['agent']['num_nodes'])]
 
 for episode in tqdm(range(config['episodes'])):
     offset=config['offset']
+    scale=episode/config['episodes']
 
     transition_list = [{
                 'states': [],
@@ -157,8 +148,7 @@ for episode in tqdm(range(config['episodes'])):
 
         init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
         pi = pred['pi']
-        eval_mask = new_data['agent']['category'] == 3
-        pi_eval = F.softmax(pi[eval_mask], dim=-1)
+        pi_eval = F.softmax(pi, dim=-1)
 
         state = environment.decoder(new_data, environment.encoder(new_data))[agent_index]
 
@@ -167,17 +157,15 @@ for episode in tqdm(range(config['episodes'])):
             true_trans_position_refine=new_true_trans_position_refine
             reg_mask = new_data['agent']['predict_mask'][agent_index, model.num_historical_steps:]
             
-            sample_action = agent.choose_action(state)
+            sample_action = agent.choose_action(state, scale)
             sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
 
-            # best_mode = torch.randint(6,size=(new_input_data['agent']['num_nodes'],))
-            best_mode = [sample_from_pdf(pi_eval) for _ in range(new_input_data['agent']['num_nodes'])]
-            best_mode = torch.tensor(np.array(best_mode))
+            # best_mode = [sample_from_pdf(pi_eval) for _ in range(new_input_data['agent']['num_nodes'])]
+            # best_mode = torch.tensor(np.array(best_mode))
+            best_mode = pi_eval.argmax(dim=-1)
             l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
                                 sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
             action_suggest_index=l2_norm.argmin(dim=-1)
-            # if batch == 30:
-            #      print(action_suggest_index)
             best_mode[agent_index] = action_suggest_index
 
             action = auto_pred['loc_refine_pos'][agent_index,action_suggest_index,:offset, :2].flatten(start_dim = 1)
@@ -198,9 +186,9 @@ for episode in tqdm(range(config['episodes'])):
                 transition_list[batch]['rewards'].append(torch.tensor([reward]).cuda())
                      
             state = next_state
-            pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
+            pi_eval = F.softmax(auto_pred['pi'], dim=-1)
             
-    agent.update(transition_list, config['buffer_batchsize'], episode, next_version_path)
+    agent.update(transition_list, config['buffer_batchsize'], episode, next_version_path, scale)
 
     discounted_return = 0
     undiscounted_return = 0
@@ -216,8 +204,10 @@ for episode in tqdm(range(config['episodes'])):
     print(discounted_return, undiscounted_return)
 
     cumulative_reward[agent_index].append(discounted_return)
+    if episode == 299:
+         vis_reward(config['algorithm'],new_data,cumulative_reward,agent_index,config['episodes']-200,next_version_path)
 
-vis_reward(new_data,cumulative_reward,agent_index,config['episodes'],next_version_path)
+vis_reward(config['algorithm'],new_data,cumulative_reward,agent_index,config['episodes'],next_version_path)
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
 pi_state_dict = agent.pi.state_dict()
@@ -231,8 +221,6 @@ model_state_dict = {
     'value': value_state_dict
 }
 
-base_path = 'checkpoints/'
-next_version_path = os.path.join(base_path, next_version_folder)
-os.makedirs(next_version_path, exist_ok=True)
+next_version_path = create_dir(base_path = 'checkpoints/')
 torch.save(model_state_dict, next_version_path+'PPO_episodes='+str(config['episodes'])+'_epochs='+str(config['epochs'])+'.ckpt')
 
