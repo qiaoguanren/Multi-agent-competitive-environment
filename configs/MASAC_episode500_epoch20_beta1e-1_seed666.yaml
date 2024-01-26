@@ -1,0 +1,18 @@
+algorithm: 'MASAC'
+seed: 666
+agent_number: 1
+actor_learning_rate : 0.00005
+critic_learning_rate: 0.0001
+gamma: 0.99
+lamda: 0.97
+hidden_dim: 128
+epochs: 10
+buffer_batchsize: 32
+episodes: 500
+offset: 5
+alpha_learning_rate: 0.0001
+density_learning_rate: 0.0001
+tau: 0.005
+beta_coef: 0.1
+kld_weight: 0.00025
+kl_coef: 0.005

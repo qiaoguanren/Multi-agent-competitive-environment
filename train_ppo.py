@@ -6,7 +6,7 @@ import torch, math
 import yaml
 import numpy as np
 import torch.nn.functional as F
-from PPO.mappo import PPO
+from algorithm.ppo import PPO
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
 from datasets import ArgoverseV2Dataset
@@ -17,11 +17,9 @@ from transforms import TargetBuilder
 from pathlib import Path
 from visualization.vis import vis_reward
 from utils.geometry import wrap_angle
-from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf, create_dir
+from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf, create_dir, save_reward
 from torch_geometric.data import Batch
 from tqdm import tqdm
-
-pl.seed_everything(2023, workers=True)
 
 parser = ArgumentParser()
 parser.add_argument("--model", type=str, default="QCNet")
@@ -32,10 +30,16 @@ parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
 parser.add_argument("--devices", type=int, default=1)
+parser.add_argument("--task", type=int, default=1)
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
-parser.add_argument("--ppo_config", default="PPO_episode500_epoch20.yaml", type=str)
-args = parser.parse_args("")
+parser.add_argument("--RL_config", default="PPO_episode500_epoch20_beta1e-1_seed2023", type=str)
+args = parser.parse_args()
 
+with open("configs/"+args.RL_config+'.yaml', "r") as file:
+        config = yaml.safe_load(file)
+file.close()
+pl.seed_everything(config['seed'], workers=True)
+print(args.RL_config)
 model = {
     "QCNet": AntoQCNet,
 }[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
@@ -51,7 +55,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
+    val_dataset[[val_dataset.raw_file_names.index('0a0ef009-9d44-4399-99e6-50004d345f34')]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -78,18 +82,20 @@ if isinstance(data, Batch):
 
 new_input_data=add_new_agent(data)
 
-with open("configs/"+args.ppo_config, "r") as file:
-        config = yaml.safe_load(file)
-file.close()
-BCmodel_state_dict = torch.load('checkpoints/BC_episodes=100_epochs=500_2.ckpt')
-
 next_version_path = create_dir(base_path = 'figures/')
-cumulative_reward = [[] for _ in range(new_input_data['agent']['num_nodes'])]
+cumulative_reward = []
+
+offset=config['offset']
+agent = PPO(
+            state_dim=model.num_modes*config['hidden_dim'],
+            action_dim = model.output_dim*offset*6,
+            config = config,
+            device = model.device,
+            offset = offset
+)
 
 for episode in tqdm(range(config['episodes'])):
-    offset=config['offset']
-    scale=episode/config['episodes']
-
+    scale=1/config['episodes']
     transition_list = [{
                 'states': [],
                 'actions': [],
@@ -98,29 +104,6 @@ for episode in tqdm(range(config['episodes'])):
                 'dones': []} for _ in range(config['buffer_batchsize'])]
         
     agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
-    agent = PPO(
-            state_dim=model.num_modes*config['hidden_dim'],
-            agent_index = agent_index,
-            hidden_dim = config['hidden_dim'],
-            action_dim = model.output_dim*offset,
-            batchsize = config['sample_batchsize'],
-            actor_learning_rate = config['actor_learning_rate'],
-            critic_learning_rate = config['critic_learning_rate'],
-            density_learning_rate = config['density_learning_rate'],
-            kld_weight = config['kld_weight'],
-            beta_coef = config['beta_coef'],
-            lamda = config['lamda'],
-            eps = config['eps'],
-            gamma = config['gamma'],
-            device = model.device,
-            agent_num = new_input_data['agent']['num_nodes'],
-            offset = offset,
-            entropy_coef=config['entropy_coef'],
-            epochs = config['epochs']
-    )
-
-    agent.pi.load_state_dict(BCmodel_state_dict['actor'])
-    agent.old_pi.load_state_dict(BCmodel_state_dict['actor'])
 
     for batch in range(config['buffer_batchsize']):
         new_data=new_input_data.cuda().clone()
@@ -166,7 +149,7 @@ for episode in tqdm(range(config['episodes'])):
             # best_mode = [sample_from_pdf(pi_eval) for _ in range(new_input_data['agent']['num_nodes'])]
             # best_mode = torch.tensor(np.array(best_mode))
             best_mode = pi_eval.argmax(dim=-1)
-            l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
+            l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2]-
                                 sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
             action_suggest_index=l2_norm.argmin(dim=-1)
             best_mode[agent_index] = action_suggest_index
@@ -206,11 +189,9 @@ for episode in tqdm(range(config['episodes'])):
 
     print(discounted_return, undiscounted_return)
 
-    cumulative_reward[agent_index].append(discounted_return)
-    if episode == 299:
-         vis_reward(config['algorithm'],new_data,cumulative_reward,agent_index,config['episodes']-200,next_version_path)
+    cumulative_reward.append(discounted_return)
 
-vis_reward(config['algorithm'],new_data,cumulative_reward,agent_index,config['episodes'],next_version_path)
+save_reward(args.RL_config+'_task'+str(args.task), next_version_path, cumulative_reward, config['agent_number'])
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
 pi_state_dict = agent.pi.state_dict()
@@ -219,11 +200,10 @@ old_pi_state_dict = agent.old_pi.state_dict()
 value_state_dict = agent.value.state_dict()
 model_state_dict = {
     'pi': pi_state_dict,
-    'old_pi': old_pi_state_dict,
     # 'old_value': old_value_state_dict,
     'value': value_state_dict
 }
 
 next_version_path = create_dir(base_path = 'checkpoints/')
-torch.save(model_state_dict, next_version_path+'PPO_episodes='+str(config['episodes'])+'_epochs='+str(config['epochs'])+'.ckpt')
+torch.save(model_state_dict, next_version_path+args.RL_config+'.ckpt')
 

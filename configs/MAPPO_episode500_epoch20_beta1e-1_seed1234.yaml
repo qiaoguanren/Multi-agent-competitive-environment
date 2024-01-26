@@ -1,0 +1,18 @@
+algorithm: 'PPO'
+seed: 1234
+agent_number: 1
+actor_learning_rate : 0.00005
+critic_learning_rate: 0.0001
+density_learning_rate: 0.0003
+gamma: 0.99
+lamda: 0.97
+eps: 0.2
+hidden_dim: 128
+entropy_coef: 0.005
+epochs: 10
+buffer_batchsize: 32
+episodes: 500
+offset: 5
+beta_coef: 0.1
+kld_weight: 0.00025
+kl_coef: 0.005

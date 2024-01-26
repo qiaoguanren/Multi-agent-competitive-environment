@@ -1,5 +1,6 @@
-import torch, copy, math
+import torch, copy, math, os
 import numpy as np
+import csv
 from utils.geometry import wrap_angle
 from shapely.geometry import Point, LineString
 from shapely.ops import nearest_points
@@ -150,21 +151,22 @@ def add_new_agent(data):
     arr_s_y = np.array([])
     arr_v_x = np.array([])
     arr_v_y = np.array([])
-    v0_x = 1*math.cos(1.23)
-    v0_y = math.sqrt(1-v0_x**2)
+    # v0_x = 1*math.cos(1.23)
+    v0_x = 3*math.cos(data['agent']['heading'][data['agent']['category']==3][0,50])
+    v0_y = math.sqrt(9-v0_x**2)
     t = 0.1
-    # x0 = x = 5259.7
-    # y0 = y = 318
+    x0 = x = 5259.7
+    y0 = y = 318
     # x0 = x = 8945
     # y0 = y = 4577.5
-    x0 = x = 2665
-    y0 = y = -2410
+    # x0 = x = 2665
+    # y0 = y = -2410
     v_x = 0
     v_y = 0
     new_heading=torch.empty_like(data['agent']['heading'][0])
-    # new_heading[:]=1.9338
+    new_heading[:]=1.9338
     # new_heading[:]=0.3898
-    new_heading[:]=1.19
+    # new_heading[:]=1.19
 
     for i in range(110):
         a_x = acceleration*math.cos(new_heading[i])
@@ -225,27 +227,6 @@ def reward_function(data,new_data,model,agent_index):
             reward1 = math.log(travel_distance/total_distance)
         else:
             reward1 = l2_norm_current_distance**2*2
-        # max_index = 0
-        # min_index = 99999
-        # max_value = 0
-        # min_value = 99999
-        # for k in range(6):
-        #     x = auto_pred["loc_refine_pos"][agent_index, k, offset-1, 0].cpu()
-        #     y = auto_pred["loc_refine_pos"][agent_index, k, offset-1, 1].cpu()
-        #     value = np.sqrt(x**2 + y**2)
-        #     if value > max_value:
-        #         max_value = value
-        #         max_index = k
-        #     if value < min_value:
-        #         min_value = value
-        #         min_index = k
-        
-        # if max_index == sample_action:
-        #     reward2 = 50
-        # elif sample_action == min_index:
-        #     reward2 = -50
-        # else:
-        #     reward2 = -10
         
         return reward1+reward2+reward3
 
@@ -255,3 +236,43 @@ def sample_from_pdf(pdf):
     sampled_value = torch.multinomial(pdf_distribution, num_samples=1)
     
     return sampled_value.item()
+
+def create_dir(base_path):
+    max_epoch = 0
+    if os.path.exists(base_path):
+        for folder in os.listdir(base_path):
+            if folder.startswith("version_"):
+                max_epoch+=1
+
+    next_version_folder = f"version_{max_epoch + 1}/"
+    next_version_path = os.path.join(base_path, next_version_folder)
+    os.makedirs(next_version_path, exist_ok=True)
+    return next_version_path
+
+def save_reward(config_name, file_path, data_list, agent_number):
+    
+    file_path = '/home/guanren/Multi-agent-competitive-environment/'+file_path+config_name+'.csv'
+
+    with open(file_path, mode='w', newline='') as file:
+        writer = csv.writer(file)
+
+        if agent_number > 1:
+
+            for row in data_list:
+                writer.writerow(row)
+
+        else:
+            for data in data_list:
+                if 'PPO' in config_name:
+                    writer.writerow([data])
+                else:
+                    writer.writerow(data)
+
+def save_gap(config_name, file_path, data_list):
+    
+    file_path = '/home/guanren/Multi-agent-competitive-environment/'+file_path+config_name+'.csv'
+
+    with open(file_path, mode='w', newline='') as file:
+        writer = csv.writer(file)
+
+        writer.writerow(data_list)

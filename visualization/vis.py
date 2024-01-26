@@ -1,5 +1,6 @@
 import io
 import math
+import pandas as pd
 from pathlib import Path
 
 import cv2
@@ -423,7 +424,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                   if (110-i)%offset==0:
                       # true_trans_position_propose=new_true_trans_position_propose
                       true_trans_position_refine=new_true_trans_position_refine
-                      # print(traj_propose[new_data["agent"]["category"] == 3,:,offset,:2])
+                      print(torch.sqrt(traj_propose[new_data["agent"]["category"] == 3,:,offset,0]**2+traj_refine[new_data["agent"]["category"] == 3,:,offset,1]**2))
                       # max_value = -1
                       # max_index = -1
                       # for k in range(6):
@@ -475,33 +476,29 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
         video.write(cv2.cvtColor(np.array(frame_temp), cv2.COLOR_RGB2BGR))
     video.release()
 
-def vis_reward(data,cumulative_reward,agent_index,episodes,version_path):
+def vis_reward(config_name, algorithm, data,cumulative_reward,agent_index,episodes,version_path):
+    
+        window_size = 5
+        moving_avg_rewards = [[] for _ in range(data['agent']['num_nodes'])]
 
-    window_size = 5
-    moving_avg_rewards = [[] for _ in range(data['agent']['num_nodes'])]
 
+        for j in range(len(cumulative_reward[agent_index])-window_size+1):
+            window = cumulative_reward[agent_index][j:j+window_size]
+            avg_reward = np.mean(window)
+            moving_avg_rewards[agent_index].append(avg_reward)
+              
 
-    for j in range(len(cumulative_reward[agent_index])-window_size+1):
-        window = cumulative_reward[agent_index][j:j+window_size]
-        avg_reward = np.mean(window)
-        moving_avg_rewards[agent_index].append(avg_reward)
-          
+        colors = ['blue', 'red', 'green', 'purple', 'orange', 'pink', 'brown', 'gray', 'olive', 'yellow']
+        plt.figure(figsize=(10, 10))
+        x = range(episodes-window_size+1)
 
-    colors = ['blue', 'red', 'green', 'purple', 'orange', 'pink', 'brown', 'gray', 'olive', 'yellow']
-    plt.figure(figsize=(10, 10))
-    x = range(episodes-window_size+1)
+        plt.plot(x, moving_avg_rewards[agent_index], color=colors[0], label=f'opponent',linewidth = 3)
 
-    plt.plot(x, moving_avg_rewards[agent_index], color=colors[0], label=f'focal_agent',linewidth = 3)
-
-    plt.title('IPPO Rewards')
-    plt.xlabel("Episodes")
-    plt.ylabel("Reward")
-    plt.legend()
-
-    current_time = datetime.now()
-    timestamp = current_time.strftime("%Y%m%d_%H%M%S")
-    full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'reward_{timestamp}.png'
-    plt.savefig(full_path)
+        plt.title(f'{algorithm}', fontsize=30)
+        plt.xlabel("Episodes",  fontsize=24)
+        plt.ylabel("Exploitability", fontsize=24)
+        plt.legend()
+        plt.savefig('/home/guanren/Multi-agent-competitive-environment/'+version_path+f'reward_{config_name}.png')
 
 
 def vis_entropy(entropy_list, episode, version_path):

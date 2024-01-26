@@ -35,7 +35,6 @@ from metrics import minFHE
 from modules import QCNetDecoder
 from modules.qcnet_decoder2 import AutoQCNetDecoder
 from predictors.qcnet import QCNet
-from PPO.mappo import PPO
 from utils import wrap_angle
 
 try:

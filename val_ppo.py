@@ -7,7 +7,7 @@ import random
 import yaml
 import numpy as np
 import torch.nn.functional as F
-from PPO.mappo import PPO
+from algorithm.ppo import PPO
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
 from datasets import ArgoverseV2Dataset
@@ -60,7 +60,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
+    val_dataset[[val_dataset.raw_file_names.index('2')]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -105,7 +105,7 @@ episodes = config['episodes']
 
 with torch.no_grad():
     for episode in tqdm(range(episodes)):
-        scale = 1/episodes
+        scale = 1
         offset=config['offset']
 
         agent_index = torch.nonzero(new_input_data['agent']['category']==3,as_tuple=False).item()
@@ -129,8 +129,8 @@ with torch.no_grad():
         )
         agent.pi.load_state_dict(model_state_dict['pi'])
         agent.old_pi.load_state_dict(model_state_dict['old_pi'])
-        # agent.old_value.load_state_dict(model_state_dict['old_value'])
-        agent.value.load_state_dict(model_state_dict['value'])
+        agent.pi.eval()
+        agent.old_pi.eval()
 
         new_data=new_input_data.cuda().clone()
 
@@ -175,8 +175,8 @@ with torch.no_grad():
 
                       # best_mode = torch.randint(6,size=(data['agent']['num_nodes'],))
                       best_mode = pi_eval.argmax(dim=-1)
-                      # best_mode[-1] = 4
-                      best_mode = torch.tensor(np.array(best_mode))
+                      best_mode[-1] = 2
+                    #   best_mode = torch.tensor(np.array(best_mode))
                       l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2] -
                                           sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[i-model.num_historical_steps:i-model.num_historical_steps+offset].unsqueeze(0)).sum(dim=-1)
                       action_suggest_index=l2_norm.argmin(dim=-1)
