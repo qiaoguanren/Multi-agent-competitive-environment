@@ -1,18 +1,20 @@
 algorithm: 'MASAC'
-seed: 666
-agent_number: 1
+seed: 1234
+agent_number: 4
 actor_learning_rate : 0.00005
-critic_learning_rate: 0.0001
+critic_learning_rate: 0.00005
+density_learning_rate: 0.0003
+alpha_learning_rate: 0.0001
 gamma: 0.99
 lamda: 0.97
+eps: 0.2
 hidden_dim: 128
+entropy_coef: 0.005
 epochs: 10
 buffer_batchsize: 32
 episodes: 500
 offset: 5
-alpha_learning_rate: 0.0001
-density_learning_rate: 0.0001
 tau: 0.005
-beta_coef: 0.1
+beta_coef: 0.01
 kld_weight: 0.00025
-kl_coef: 0.005
+kl_coef: 0.001

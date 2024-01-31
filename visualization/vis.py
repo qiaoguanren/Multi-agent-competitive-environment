@@ -279,7 +279,7 @@ def plot_traj(scenario_static_map,scenario,bounds=80.0):
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
 
-def _plot_actor_tracks_with_data(ax: plt.Axes, data, timestep: int):
+def _plot_actor_tracks_with_data(ax: plt.Axes, data, agent_number, timestep: int):
     """Plot all actor tracks (up to a particular time step) associated with an Argoverse scenario.
 
     Args:
@@ -319,16 +319,17 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, timestep: int):
               ec='b')
         elif i==data['agent']['av_index']:
             track_color = _AV_COLOR
-        elif i==data['agent']['num_nodes']-1:
-            _plot_polylines([actor_trajectory], color="black", line_width=2)
-            track_color = "black"
-            ax.arrow(actor_trajectory[-1,0], actor_trajectory[-1,1], data['agent']['velocity'][i,timestep,0].cpu(),data['agent']['velocity'][i,timestep,1].cpu(),
-              width=0.1,
-              length_includes_head=True,
-              head_width=0.75,
-              head_length=1,
-              fc='r',
-              ec='y')
+        elif i==data['agent']['num_nodes']-agent_number+1:
+                _plot_polylines([actor_trajectory], color="black", line_width=2)
+                track_color = _FOCAL_AGENT_COLOR
+                ax.arrow(actor_trajectory[-1,0], actor_trajectory[-1,1], data['agent']['velocity'][i,timestep,0].cpu(),data['agent']['velocity'][i,timestep,1].cpu(),
+                width=0.1,
+                length_includes_head=True,
+                head_width=0.75,
+                head_length=1,
+                fc='r',
+                ec='y')
+                agent_number -= 1
         elif data['agent']['type'][i]>4:
             continue
 
@@ -365,13 +366,13 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, timestep: int):
 
 
 
-def plot_traj_with_data(data,scenario_static_map,t=50,bounds=80.0):
+def plot_traj_with_data(data,scenario_static_map,agent_number,t=50,bounds=80.0):
     plot_bounds = (0, 0, 0, 0)
 
     _, ax = plt.subplots()
 
     _plot_static_map_elements(scenario_static_map)
-    cur_plot_bounds = _plot_actor_tracks_with_data(ax, data, t)
+    cur_plot_bounds = _plot_actor_tracks_with_data(ax, data, agent_number, t)
     if cur_plot_bounds:
         plot_bounds = cur_plot_bounds
         # print(plot_bounds)

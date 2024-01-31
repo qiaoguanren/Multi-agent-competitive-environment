@@ -157,7 +157,7 @@ class MAPPO(PPO):
                 nn.utils.clip_grad_norm_(self.pi.parameters(), 10)
                 self.optimizer.step()
 
-                if epoch%5 == 0:
+                if epoch%2 == 0:
                     self.old_pi.load_state_dict(self.pi.state_dict())
                 # self.old_value.load_state_dict(self.value.state_dict())
                 start_index += 4

@@ -19,7 +19,7 @@ class MASAC(SAC):
         s_next = []
         o_next = []
         done = []
-        ground_b = []
+        opponent = []
 
         with torch.no_grad():
                 # for _ in range(sample_batchsize):
@@ -28,25 +28,34 @@ class MASAC(SAC):
                         s+=transition[row]['states'][i]
                         
                         s_next+=transition[row]['next_states'][i]
-                    a+=transition[row]['actions'][agent_index]
+                        a+=transition[row]['actions'][i]
+                        if i!=agent_index:
+                            opponent+=transition[row]['actions'][i]
                     r+=transition[row]['rewards'][agent_index]
-                    o+=transition[row]['states'][agent_index]
-                    o_next+=transition[row]['next_states'][agent_index]
+                    o += transition[row]['states'][agent_index]
+                    o_next += transition[row]['next_states'][agent_index]
               
                     done+=transition[row]['dones']
-                    ground_b+=transition[row]['ground_b'][agent_index]
-                return s, o, a, r, s_next,o_next, done, ground_b
+                return s, o, a, r, o_next, s_next,opponent, done
     
-    def get_target(self, rewards, next_states, next_conservations, dones, scale):
+    def get_target(self, rewards, next_states, next_observations, opponent_actions, dones, scale):
         with torch.no_grad():
-            _,_,actions, log_prob = self.actor(next_conservations, scale)
+            _,_,actions, log_prob = self.actor(next_observations, scale)
             entropy = -log_prob
-            q1_value = self.target_critic_1(next_states, actions, self.agent_number)
-            q2_value = self.target_critic_2(next_states, actions, self.agent_number)
+            if len(opponent_actions)>0:
+                actions = torch.cat((actions, opponent_actions), dim=-1)
+            q1_value = self.target_critic_1(next_states, actions)
+            q2_value = self.target_critic_2(next_states, actions)
             next_value = torch.min(q1_value,
                                   q2_value) + self.log_alpha.exp() * entropy
 
             td_target = rewards + self.gamma * next_value * (1 - dones)
+            # _, log_prob_game = self.density_model.log_probs(inputs=next_observations,
+            #                                                             cond_inputs=None)
+            # log_prob_game = F.sigmoid((log_prob_game - log_prob_game.mean()) / log_prob_game.std())
+            # beta_t = self.beta_coef / (log_prob_game)
+            
+            # td_target = td_target + beta_t
 
         return td_target
     
@@ -95,60 +104,74 @@ class MASAC(SAC):
             
             start_index = 0
             
-            for _ in range(8):
-
-                states, observations, actions, rewards, next_states,next_observations, dones, ground_b= self.sample(transition, start_index, agent_index)
-                    
-                observations = torch.stack(observations, dim=0).flatten(start_dim=1).type(torch.FloatTensor).to(self.device)
-                next_observations = torch.stack(next_observations, dim=0).flatten(start_dim=1).type(torch.FloatTensor).to(self.device)
+            for i in range(8):
+                states, observations, actions, rewards, next_observations, next_states,opponent_actions, dones= self.sample(transition, start_index, agent_index)
 
                 dones = torch.stack(dones, dim=0).view(-1,1)
-                states = torch.stack(states, dim=0).flatten(start_dim=1).type(torch.FloatTensor).to(self.device)
-                next_states = torch.stack(next_states, dim=0).flatten(start_dim=1).type(torch.FloatTensor).to(self.device)
-                ground_b = torch.stack(ground_b, dim=0).flatten(start_dim=1).type(torch.FloatTensor).to(self.device)
+                states = torch.stack(states, dim=0).reshape(-1,self.agent_number*self.state_dim).type(torch.FloatTensor).to(self.device)
+                next_states = torch.stack(next_states, dim=0).reshape(-1,self.agent_number*self.state_dim).type(torch.FloatTensor).to(self.device)
+                observations = torch.stack(observations, dim=0).type(torch.FloatTensor).to(self.device)
+                next_observations = torch.stack(next_observations, dim=0).type(torch.FloatTensor).to(self.device)
+                if len(opponent_actions)>0:
+                    opponent_actions = torch.stack(opponent_actions, dim=0).flatten(start_dim=1).reshape(-1,(self.agent_number-1)*2*5).type(torch.FloatTensor).to(self.device)
                 rewards = torch.stack(rewards, dim=0).view(-1,1).type(torch.FloatTensor).to(self.device)
 
-                actions = torch.stack(actions, dim=0).flatten(start_dim=1).type(torch.FloatTensor).to(self.device)
+                actions = torch.stack(actions, dim=0).flatten(start_dim=1).reshape(-1,self.agent_number*2*5).type(torch.FloatTensor).to(self.device)
 
                 rewards = (rewards - rewards.mean())/(rewards.std() + 1e-8)
 
-                td_target = self.get_target(rewards, next_states, next_observations, dones, scale)
+                td_target = self.get_target(rewards, next_states, next_observations, opponent_actions, dones, scale)
                 critic_1_loss = torch.mean(
-                    F.mse_loss(self.critic_1(states, actions, self.agent_number), td_target.detach()))
+                    F.mse_loss(self.critic_1(states, actions), td_target.detach()))
                 critic_2_loss = torch.mean(
-                    F.mse_loss(self.critic_2(states, actions, self.agent_number), td_target.detach()))
+                    F.mse_loss(self.critic_2(states, actions), td_target.detach()))
+
+                _,_,new_actions, log_prob = self.actor(observations, scale)
+                if len(opponent_actions)>0:
+                    new_actions = torch.cat([new_actions, opponent_actions], dim=-1)
+                entropy = -log_prob
+                q1_value = self.critic_1(states, new_actions)
+                q2_value = self.critic_2(states, new_actions)
                 self.critic_1_optimizer.zero_grad()
                 critic_1_loss.backward()
                 self.critic_1_optimizer.step()
                 self.critic_2_optimizer.zero_grad()
                 critic_2_loss.backward()
                 self.critic_2_optimizer.step()
+                # vf_target = self.target_critic_v(next_states)
+                # v_pred = self.critic_v(states)
+                # v_target = torch.min(q1_value, q2_value) - self.log_alpha * log_prob
+                # v_loss = F.mse_loss(v_pred, v_target.detach())
 
-                _,_,new_actions, log_prob = self.actor(observations, scale)
-                entropy = -log_prob
-                q1_value = self.critic_1(states, new_actions, self.agent_number)
-                q2_value = self.critic_2(states, new_actions, self.agent_number)
-                actor_loss = torch.mean(-self.log_alpha.exp() * entropy -
-                                        torch.min(q1_value, q2_value))
+                # advantage = torch.min(q1_value, q2_value) - v_pred.detach()
+                actor_loss = (self.log_alpha * log_prob - torch.min(q1_value, q2_value)).mean()
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self.actor_optimizer.step()
-
+                
+                # self.soft_update(self.critic_v, self.target_critic_v)
+                
+                # self.critic_v_optimizer.zero_grad()
+                # v_loss.backward()
+                # self.critic_v_optimizer.step()
                 alpha_loss = torch.mean(
                 (entropy - self.target_entropy).detach() * self.log_alpha.exp())
                 self.log_alpha_optimizer.zero_grad()
                 alpha_loss.backward()
                 self.log_alpha_optimizer.step()
+                
                 torch.nn.utils.clip_grad_norm_(list(self.actor.parameters()) + list(self.critic_1.parameters()) + list(self.critic_2.parameters()), 0.5)
 
+                start_index += 4
 
                 self.soft_update(self.critic_1, self.target_critic_1)
                 self.soft_update(self.critic_2, self.target_critic_2)
-
-                start_index += 4
             
                 if epoch == self.epochs - 1:
-                    v_list = np.append(v_list,  float(torch.mean(q1_value.squeeze(-1))))
+                    value = torch.min(q1_value,
+                                  q2_value) + self.log_alpha.exp() * entropy
+                    v_list = np.append(v_list,  float(torch.mean(value.squeeze(-1))))
+
         
         return float(v_list.mean())
 

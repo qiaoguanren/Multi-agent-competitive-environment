@@ -1,18 +1,20 @@
-algorithm: 'CCE-MAPPO'
+algorithm: 'MASAC'
 seed: 1234
-agent_number: 3
+agent_number: 4
 actor_learning_rate : 0.00005
-critic_learning_rate: 0.0001
+critic_learning_rate: 0.00005
 density_learning_rate: 0.0003
+alpha_learning_rate: 0.0001
 gamma: 0.99
 lamda: 0.97
 eps: 0.2
 hidden_dim: 128
-entropy_coef: 0.01
+entropy_coef: 0.005
 epochs: 10
 buffer_batchsize: 32
-episodes: 500
+episodes: 2
 offset: 5
+tau: 0.005
 beta_coef: 0.1
 kld_weight: 0.00025
 kl_coef: 0.005

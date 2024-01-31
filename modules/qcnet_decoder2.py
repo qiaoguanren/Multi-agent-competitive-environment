@@ -218,6 +218,6 @@ class AutoQCNetDecoder(nn.Module):
             m = self.a2m_propose_attn_layers[i]((x_a, m), r_a2m, edge_index_a2m)
             m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
         m = self.m2m_propose_attn_layer(m, None, edge_index_m2m)
-        m = m.reshape(-1, self.num_modes, self.hidden_dim)
+        m = m.reshape(-1, self.num_modes*self.hidden_dim)
 
         return m

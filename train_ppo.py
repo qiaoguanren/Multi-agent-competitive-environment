@@ -55,7 +55,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a0ef009-9d44-4399-99e6-50004d345f34')]],
+    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -80,8 +80,16 @@ for param in environment.decoder.parameters():
 if isinstance(data, Batch):
     data['agent']['av_index'] += data['agent']['ptr'][:-1]
 
-new_input_data=add_new_agent(data)
-
+# new_input_data=data
+v0_x = 1*math.cos(1.19)
+v0_y = math.sqrt(1**2-v0_x**2)
+new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
+v0_x = 1*math.cos(-1.95)
+v0_y = -math.sqrt(1**2-v0_x**2)
+new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
+v0_x = -1*math.cos(-0.33)
+v0_y = math.sqrt(1**2-v0_x**2)
+new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
 next_version_path = create_dir(base_path = 'figures/')
 cumulative_reward = []
 
@@ -146,8 +154,6 @@ for episode in tqdm(range(config['episodes'])):
             sample_action = agent.choose_action(state, scale)
             sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
 
-            # best_mode = [sample_from_pdf(pi_eval) for _ in range(new_input_data['agent']['num_nodes'])]
-            # best_mode = torch.tensor(np.array(best_mode))
             best_mode = pi_eval.argmax(dim=-1)
             l2_norm = (torch.norm(auto_pred['loc_refine_pos'][agent_index,:,:offset, :2]-
                                 sample_action[:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask[timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
@@ -168,7 +174,7 @@ for episode in tqdm(range(config['episodes'])):
                     transition_list[batch]['dones'].append(torch.tensor(1).cuda())
                 else:
                     transition_list[batch]['dones'].append(torch.tensor(0).cuda())
-                reward = reward_function(new_input_data.clone(),new_data.clone(),model,agent_index)
+                reward = reward_function(new_input_data.clone(),new_data.clone(),model,agent_index, config['agent_number'])
                 transition_list[batch]['rewards'].append(torch.tensor([reward]).cuda())
                      
             state = next_state
@@ -194,16 +200,16 @@ for episode in tqdm(range(config['episodes'])):
 save_reward(args.RL_config+'_task'+str(args.task), next_version_path, cumulative_reward, config['agent_number'])
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
-pi_state_dict = agent.pi.state_dict()
-old_pi_state_dict = agent.old_pi.state_dict()
-# old_value_state_dict = agent.old_value.state_dict()
-value_state_dict = agent.value.state_dict()
-model_state_dict = {
-    'pi': pi_state_dict,
-    # 'old_value': old_value_state_dict,
-    'value': value_state_dict
-}
+# pi_state_dict = agent.pi.state_dict()
+# old_pi_state_dict = agent.old_pi.state_dict()
+# # old_value_state_dict = agent.old_value.state_dict()
+# value_state_dict = agent.value.state_dict()
+# model_state_dict = {
+#     'pi': pi_state_dict,
+#     # 'old_value': old_value_state_dict,
+#     'value': value_state_dict
+# }
 
-next_version_path = create_dir(base_path = 'checkpoints/')
-torch.save(model_state_dict, next_version_path+args.RL_config+'.ckpt')
+# next_version_path = create_dir(base_path = 'checkpoints/')
+# torch.save(model_state_dict, next_version_path+args.RL_config+'.ckpt')
 

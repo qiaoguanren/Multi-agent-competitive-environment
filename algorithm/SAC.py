@@ -48,25 +48,35 @@ class Policy(nn.Module):
         return mean, b, normal_sample, log_prob
     
 class QValueNet(nn.Module):
-    def __init__(self, state_dim, action_dim, hidden_dim):
+    def __init__(self, state_dim, action_dim, hidden_dim, agent_number):
         super(QValueNet, self).__init__()
         self.f = nn.Sequential(
-            layer_init(nn.Linear(state_dim+(action_dim//6), hidden_dim)),
+            layer_init(nn.Linear(agent_number*state_dim+agent_number*(action_dim//6), hidden_dim)),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
             layer_init(nn.Linear(hidden_dim, 1)),
         )
 
-        self.linear = nn.Linear(3*4*12, 4*12)
+    def forward(self, states, actions):
 
-    def forward(self, states, actions, agent_number):
-        if agent_number > 1:
-        
-            states = self.linear(states.transpose(0,1))
-            states = states.transpose(0,1)
+        q = self.f(torch.cat([states, actions], dim=-1))
+        return q
+    
 
-        v = self.f(torch.cat([states, actions], dim=-1))
-        return v
+# class V_Net(nn.Module):
+#     def __init__(self, state_dim, hidden_dim):
+#         super(V_Net, self).__init__()
+#         self.f = nn.Sequential(
+#             layer_init(nn.Linear(state_dim, hidden_dim)),
+#             nn.LayerNorm(hidden_dim),
+#             nn.ReLU(inplace=True),
+#             layer_init(nn.Linear(hidden_dim, 1)),
+#         )
+
+#     def forward(self, states):
+
+#         v = self.f(states)
+#         return v
     
 class SAC:
     def __init__(self, 
@@ -79,10 +89,12 @@ class SAC:
         self.agent_number = config['agent_number']
         self.state_dim = state_dim
         self.actor = Policy(state_dim, self.hidden_dim, action_dim).to(device)
-        self.critic_1 = QValueNet(state_dim, action_dim, self.hidden_dim).to(device)
-        self.critic_2 = QValueNet(state_dim, action_dim, self.hidden_dim).to(device)
-        self.target_critic_1 = QValueNet(state_dim,action_dim,self.hidden_dim).to(device)
-        self.target_critic_2 = QValueNet(state_dim,action_dim,self.hidden_dim).to(device)
+        self.critic_1 = QValueNet(state_dim, action_dim, self.hidden_dim, self.agent_number).to(device)
+        self.critic_2 = QValueNet(state_dim, action_dim, self.hidden_dim, self.agent_number).to(device)
+        # self.critic_v = V_Net(state_dim, self.hidden_dim).to(device)
+        self.target_critic_1 = QValueNet(state_dim,action_dim,self.hidden_dim, self.agent_number).to(device)
+        self.target_critic_2 = QValueNet(state_dim,action_dim,self.hidden_dim, self.agent_number).to(device)
+        # self.target_critic_v = V_Net(state_dim,self.hidden_dim).to(device)
         self.target_critic_1.load_state_dict(self.critic_1.state_dict())
         self.target_critic_2.load_state_dict(self.critic_2.state_dict())
         self.actor_lr = config['actor_learning_rate']
@@ -104,8 +116,10 @@ class SAC:
                                                    lr=self.critic_lr)
         self.critic_2_optimizer = torch.optim.Adam(self.critic_2.parameters(),
                                                    lr=self.critic_lr)
+        # self.critic_v_optimizer = torch.optim.Adam(self.critic_v.parameters(),
+        #                                            lr=self.critic_lr)
 
-        self.log_alpha = torch.tensor(np.log(0.005), dtype=torch.float)
+        self.log_alpha = torch.tensor(np.log(0.001), dtype=torch.float)
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha],
                                                     lr=self.alpha_learning_rate)
@@ -239,8 +253,6 @@ class SAC:
                 q2_value = self.critic_2(new_Q_input)
                 actor_loss = torch.mean(-self.log_alpha.exp() * entropy -
                                         torch.min(q1_value, q2_value))
-                KL = (ground_b*torch.exp((-torch.abs(mean - actions)/ground_b))+torch.abs(mean - actions))/b + torch.log(b/ground_b) - 1
-                actor_loss = actor_loss - torch.mean(self.kl_coef*KL)
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self.actor_optimizer.step()

@@ -4,6 +4,7 @@ import csv
 from utils.geometry import wrap_angle
 from shapely.geometry import Point, LineString
 from shapely.ops import nearest_points
+import torch.nn.functional as F
 
 def get_transform_mat(input_data,model):
     origin = input_data["agent"]["position"][:, model.num_historical_steps - 1]
@@ -145,30 +146,29 @@ def get_auto_pred(input_data, model, loc_refine_pos, loc_refine_head, offset, an
         None if anchor is None else (anchor_auto_traj_propose, anchor_auto_traj_refine)
     )
 
-def add_new_agent(data):
-    acceleration = 1.2
+def add_new_agent(data, a, v0_x, v0_y, heading, x0, y0):
+    acceleration = a
     arr_s_x = np.array([])
     arr_s_y = np.array([])
     arr_v_x = np.array([])
     arr_v_y = np.array([])
     # v0_x = 1*math.cos(1.23)
-    v0_x = 3*math.cos(data['agent']['heading'][data['agent']['category']==3][0,50])
-    v0_y = math.sqrt(9-v0_x**2)
     t = 0.1
-    x0 = x = 5259.7
-    y0 = y = 318
-    # x0 = x = 8945
-    # y0 = y = 4577.5
+    x = x0
+    y = y0
+    # x0 = x = 5259.7
+    # y0 = y = 318
     # x0 = x = 2665
     # y0 = y = -2410
     v_x = 0
     v_y = 0
     new_heading=torch.empty_like(data['agent']['heading'][0])
-    new_heading[:]=1.9338
+    # new_heading[:]=1.9338
     # new_heading[:]=0.3898
-    # new_heading[:]=1.19
+    new_heading[:]=heading
 
     for i in range(110):
+
         a_x = acceleration*math.cos(new_heading[i])
         x = x + v0_x*t + 0.5*acceleration*(t**2)
         v0_x = v0_x + a_x*t
@@ -176,7 +176,10 @@ def add_new_agent(data):
         arr_s_x = np.append(arr_s_x,x)
         arr_v_x = np.append(arr_v_x,v_x)
 
-        a_y = math.sqrt(acceleration**2-a_x**2)
+        if v0_y < 0:
+            a_y = -math.sqrt(acceleration**2-a_x**2)
+        else:
+            a_y = math.sqrt(acceleration**2-a_x**2)
         y = y + v0_y*t + 0.5*acceleration*(t**2)
         v0_y = v0_y + a_y*t
         v_y = v0_y
@@ -207,7 +210,7 @@ def add_new_agent(data):
     data['agent']['ptr'][1]+=1    #ptr
     return data
 
-def reward_function(data,new_data,model,agent_index):
+def reward_function(data,new_data,model,agent_index, agent_number):
                 
         reward1 = reward2 = reward3 = 0
         gt = data['agent']['position'][agent_index, model.num_historical_steps+model.num_future_steps-1:model.num_historical_steps+model.num_future_steps, :model.output_dim]
@@ -227,6 +230,15 @@ def reward_function(data,new_data,model,agent_index):
             reward1 = math.log(travel_distance/total_distance)
         else:
             reward1 = l2_norm_current_distance**2*2
+        
+        # for i in range(new_data['agent']['num_nodes']):
+        #     if i==agent_index:
+        #         continue
+        #     distance = torch.norm(new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-new_data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],dim=-1)
+        #     if distance < 5e-2:
+        #         break
+        # if distance < 5e-2:
+        #     reward2 = -10
         
         return reward1+reward2+reward3
 
@@ -251,7 +263,7 @@ def create_dir(base_path):
 
 def save_reward(config_name, file_path, data_list, agent_number):
     
-    file_path = '/home/guanren/Multi-agent-competitive-environment/'+file_path+config_name+'.csv'
+    file_path = '/home/guanren/Multi-agent-competitive-environment/'+file_path+config_name+'_agent-number'+str(agent_number)+'.csv'
 
     with open(file_path, mode='w', newline='') as file:
         writer = csv.writer(file)
@@ -276,3 +288,91 @@ def save_gap(config_name, file_path, data_list):
         writer = csv.writer(file)
 
         writer.writerow(data_list)
+
+def process_batch(batch, config, new_input_data, model, environment, agent, choose_agent, scale, offset, transition_list):
+    
+        new_data=new_input_data.cuda().clone()
+
+        pred = model(new_data)
+        if model.output_head:
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
+                                    pred['loc_propose_head'],
+                                    pred['scale_propose_pos'][..., :model.output_dim],
+                                    pred['conc_propose_head']], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :model.output_dim],
+                                    pred['loc_refine_head'],
+                                    pred['scale_refine_pos'][..., :model.output_dim],
+                                    pred['conc_refine_head']], dim=-1)
+        else:
+            traj_propose = torch.cat([pred['loc_propose_pos'][..., :model.output_dim],
+                                    pred['scale_propose_pos'][..., :model.output_dim]], dim=-1)
+            traj_refine = torch.cat([pred['loc_refine_pos'][..., :model.output_dim],
+                                    pred['scale_refine_pos'][..., :model.output_dim]], dim=-1)
+
+        auto_pred=pred
+        origin,theta,rot_mat=get_transform_mat(new_data,model)
+        new_true_trans_position_refine = torch.einsum(
+            "bijk,bkn->bijn",
+            pred["loc_refine_pos"][..., : model.output_dim],
+            rot_mat.swapaxes(-1, -2),
+        ) + origin[:, :2].unsqueeze(1).unsqueeze(1)
+
+        init_origin,init_theta,init_rot_mat=get_transform_mat(new_data,model)
+        pi = pred['pi']
+        pi_eval = F.softmax(pi, dim=-1)
+
+        state_temp_list = []
+        global_state = environment.decoder(new_data, environment.encoder(new_data))
+        for i in range(config['agent_number']):
+            state_temp_list.append(global_state[choose_agent[i]])
+
+        for timestep in range(0,model.num_future_steps,offset):
+
+            true_trans_position_refine=new_true_trans_position_refine
+            reg_mask_list = []
+            for i in range(config['agent_number']):
+                reg_mask = new_data['agent']['predict_mask'][choose_agent[i], model.num_historical_steps:]
+                reg_mask_list.append(reg_mask)
+            
+            sample_action_list = []
+            for i in range(config['agent_number']):
+                sample_action = agent.choose_action(state_temp_list[i], scale)
+                sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
+                sample_action_list.append(sample_action)
+
+            best_mode = pi_eval.argmax(dim=-1)
+            action_suggest_index_list = []
+            for i in range(config['agent_number']):
+                l2_norm = (torch.norm(auto_pred['loc_refine_pos'][choose_agent[i],:,:offset, :2] -
+                                    sample_action_list[i][:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask_list[i][timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
+                action_suggest_index=l2_norm.argmin(dim=-1)
+                best_mode[choose_agent[i]] = action_suggest_index
+                action_suggest_index_list.append(action_suggest_index)
+
+            action_list = []
+            for i in range(config['agent_number']):
+                action = auto_pred['loc_refine_pos'][choose_agent[i],action_suggest_index_list[i],:offset, :2].flatten(start_dim = 1)
+                action_list.append(action)
+
+            new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
+                new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
+            )
+
+            next_state_temp_list = []
+            global_next_state = environment.decoder(new_data, environment.encoder(new_data))
+            for i in range(config['agent_number']):
+                next_state_temp_list.append(global_next_state[choose_agent[i]])
+            for i in range(config['agent_number']):
+                transition_list[batch]['states'][i].append(state_temp_list[i])
+                transition_list[batch]['actions'][i].append(action_list[i])
+                transition_list[batch]['next_states'][i].append(next_state_temp_list[i])
+            if timestep == model.num_future_steps - offset:
+                transition_list[batch]['dones'].append(torch.tensor(1).cuda())
+            else:
+                transition_list[batch]['dones'].append(torch.tensor(0).cuda())
+            for i in range(config['agent_number']):
+                reward = reward_function(new_input_data.clone(),new_data.clone(),model,choose_agent[i], config['agent_number'])
+                transition_list[batch]['rewards'][i].append(torch.tensor([reward]).cuda())
+                     
+            state_temp_list = next_state_temp_list
+            pi_eval = F.softmax(auto_pred['pi'], dim=-1)
