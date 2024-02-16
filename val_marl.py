@@ -109,26 +109,35 @@ v0_y = -math.sqrt(1**2-v0_x**2)
 new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
 v0_x = -1*math.cos(-0.33)
 v0_y = math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
-model_state_dict = torch.load('checkpoints/version_30/MASAC_episode500_epoch10_beta1e-1_seed1234_task2.ckpt')
+new_input_data=add_new_agent(new_input_data,-0.35, v0_x, v0_y, -0.33, 2725, -2386)
+# v0_x = 1*math.cos(1.9338)
+# v0_y = math.sqrt(1**2-v0_x**2)
+# new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 1.9338, 5259.7, 318)
+# v0_x = 1*math.cos(5.07)
+# v0_y = -math.sqrt(1**2-v0_x**2)
+# new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 5.07, 5229.7, 400)
+# v0_x = 1*math.cos(5.07)
+# v0_y = -math.sqrt(1**2-v0_x**2)
+# new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 5.07, 5235.7, 395)
+model_state_dict = torch.load('checkpoints/version_31/CCE-MASAC_episode500_epoch10_beta1e-2_seed1234_task2.ckpt')
 
 offset=config['offset']
-if config['algorithm'] != 'MASAC':
-        agent = MAPPO(
+if 'MASAC' not in config['algorithm']:
+    agents = [MAPPO(
                 state_dim=model.num_modes*config['hidden_dim'],
                 action_dim = model.output_dim*offset*6,
                 config = config,
                 device = model.device,
                 offset = offset
-        )
+        ) for _ in range(config['agent_number'])]
 else:
-    agent = MASAC(
+    agents = [MASAC(
           state_dim=model.num_modes*config['hidden_dim'],
           action_dim = model.output_dim*offset*6,
           config = config,
           device = model.device,
           offset = offset
-    )
+    ) for _ in range(config['agent_number'])]
 
 choose_agent = []    
 agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
@@ -136,8 +145,9 @@ choose_agent.append(agent_index)
 for i in range(config['agent_number']-1):
     choose_agent.append(data['agent']['num_nodes']+i)
 
-agent.actor.load_state_dict(model_state_dict['actor'])
-agent.actor.eval()
+for i in range(config['agent_number']):
+    agents[i].actor.load_state_dict(model_state_dict[f'agent_{i}_actor'])
+    agents[i].actor.eval()
 
 with torch.no_grad():
     for episode in tqdm(range(config['episodes'])):
@@ -192,7 +202,7 @@ with torch.no_grad():
                     
                     sample_action_list = []
                     for j in range(config['agent_number']):
-                        sample_action = agent.choose_action(state_temp_list[j], scale)
+                        sample_action = agents[j].choose_action(state_temp_list[j], scale)
                         sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
                         sample_action_list.append(sample_action)
 

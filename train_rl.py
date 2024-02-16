@@ -7,6 +7,7 @@ import yaml
 import numpy as np
 import torch.nn.functional as F
 from algorithm.ppo import PPO
+from algorithm.SAC import SAC
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
 from datasets import ArgoverseV2Dataset
@@ -92,15 +93,26 @@ v0_y = math.sqrt(1**2-v0_x**2)
 new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
 next_version_path = create_dir(base_path = 'figures/')
 cumulative_reward = []
+agent_index = -1
 
 offset=config['offset']
-agent = PPO(
-            state_dim=model.num_modes*config['hidden_dim'],
-            action_dim = model.output_dim*offset*6,
-            config = config,
-            device = model.device,
-            offset = offset
-)
+if 'SAC' not in config['algorithm']:
+    agent = PPO(
+                state_dim=model.num_modes*config['hidden_dim'],
+                action_dim = model.output_dim*offset*6,
+                config = config,
+                device = model.device,
+                offset = offset
+    )
+else:
+    agent = SAC(
+          state_dim=model.num_modes*config['hidden_dim'],
+          action_dim = model.output_dim*offset*6,
+          config = config,
+          device = model.device,
+          offset = offset
+    )
+     
 
 for episode in tqdm(range(config['episodes'])):
     scale=1/config['episodes']
@@ -111,7 +123,7 @@ for episode in tqdm(range(config['episodes'])):
                 'rewards': [],
                 'dones': []} for _ in range(config['buffer_batchsize'])]
         
-    agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
+    # agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
 
     for batch in range(config['buffer_batchsize']):
         new_data=new_input_data.cuda().clone()
@@ -180,7 +192,7 @@ for episode in tqdm(range(config['episodes'])):
             state = next_state
             pi_eval = F.softmax(auto_pred['pi'], dim=-1)
             
-    agent.update(transition_list, config['buffer_batchsize'], episode, next_version_path, scale)
+    agent.update(transition_list, scale, agent_index)
 
     discounted_return = 0
     undiscounted_return = 0
@@ -193,23 +205,24 @@ for episode in tqdm(range(config['episodes'])):
         discounted_return = (config['gamma'] * discounted_return) + mean_reward
         undiscounted_return += mean_reward
 
-    print(discounted_return, undiscounted_return)
+    print(discounted_return)
 
     cumulative_reward.append(discounted_return)
 
-save_reward(args.RL_config+'_task'+str(args.task), next_version_path, cumulative_reward, config['agent_number'])
+save_reward(args.RL_config+'_task'+str(args.task)+'_agent'+str(agent_index), next_version_path, cumulative_reward, config['agent_number'])
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
-# pi_state_dict = agent.pi.state_dict()
-# old_pi_state_dict = agent.old_pi.state_dict()
-# # old_value_state_dict = agent.old_value.state_dict()
-# value_state_dict = agent.value.state_dict()
-# model_state_dict = {
-#     'pi': pi_state_dict,
-#     # 'old_value': old_value_state_dict,
-#     'value': value_state_dict
-# }
+if 'SAC' not in config['algorithm']:
+    pi_state_dict = agent.pi.state_dict()
+    old_pi_state_dict = agent.old_pi.state_dict()
+    # old_value_state_dict = agent.old_value.state_dict()
+    value_state_dict = agent.value.state_dict()
+    model_state_dict = {
+        'pi': pi_state_dict,
+        # 'old_value': old_value_state_dict,
+        'value': value_state_dict
+    }
 
-# next_version_path = create_dir(base_path = 'checkpoints/')
-# torch.save(model_state_dict, next_version_path+args.RL_config+'.ckpt')
+    next_version_path = create_dir(base_path = 'checkpoints/')
+    torch.save(model_state_dict, next_version_path+args.RL_config+'.ckpt')
 

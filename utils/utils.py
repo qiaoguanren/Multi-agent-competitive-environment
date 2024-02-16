@@ -275,10 +275,8 @@ def save_reward(config_name, file_path, data_list, agent_number):
 
         else:
             for data in data_list:
-                if 'PPO' in config_name:
-                    writer.writerow([data])
-                else:
-                    writer.writerow(data)
+                writer.writerow([data])
+
 
 def save_gap(config_name, file_path, data_list):
     
@@ -289,7 +287,7 @@ def save_gap(config_name, file_path, data_list):
 
         writer.writerow(data_list)
 
-def process_batch(batch, config, new_input_data, model, environment, agent, choose_agent, scale, offset, transition_list):
+def process_batch(batch, config, new_input_data, model, environment, agents, choose_agent, scale, offset, transition_list):
     
         new_data=new_input_data.cuda().clone()
 
@@ -336,7 +334,7 @@ def process_batch(batch, config, new_input_data, model, environment, agent, choo
             
             sample_action_list = []
             for i in range(config['agent_number']):
-                sample_action = agent.choose_action(state_temp_list[i], scale)
+                sample_action = agents[i].choose_action(state_temp_list[i], scale)
                 sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
                 sample_action_list.append(sample_action)
 

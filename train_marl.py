@@ -92,21 +92,21 @@ cumulative_reward = []
 
 offset=config['offset']
 if 'MASAC' not in config['algorithm']:
-    agent = MAPPO(
+    agents = [MAPPO(
                 state_dim=model.num_modes*config['hidden_dim'],
                 action_dim = model.output_dim*offset*6,
                 config = config,
                 device = model.device,
                 offset = offset
-        )
+        ) for _ in range(config['agent_number'])]
 else:
-    agent = MASAC(
+    agents = [MASAC(
           state_dim=model.num_modes*config['hidden_dim'],
           action_dim = model.output_dim*offset*6,
           config = config,
           device = model.device,
           offset = offset
-    )
+    ) for _ in range(config['agent_number'])]
 
 choose_agent = []    
 agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
@@ -114,7 +114,7 @@ choose_agent.append(agent_index)
 for i in range(config['agent_number']-1):
     choose_agent.append(data['agent']['num_nodes']+i)
 
-v_array = np.array([])
+v_array = np.empty((config['agent_number'], config['episodes']))
 
 for episode in tqdm(range(config['episodes'])):
     
@@ -128,13 +128,13 @@ for episode in tqdm(range(config['episodes'])):
                 'dones': []} for _ in range(config['buffer_batchsize'])]
     
     for batch in range(config['buffer_batchsize']):
-        process_batch(batch, config, new_input_data, model, environment, agent, choose_agent, scale, offset, transition_list)
+        process_batch(batch, config, new_input_data, model, environment, agents, choose_agent, scale, offset, transition_list)
 
     for i in range(config['agent_number']):
-        v = agent.update(transition_list, config['buffer_batchsize'], scale, i)
-        if i==0:
+        v = agents[i].update(transition_list, config['buffer_batchsize'], scale, i)
+        if i == 0:
             print(v)
-            v_array = np.append(v_array, v)
+        v_array[i][episode] = v
 
     discounted_return_list = []
     discounted_return = 0
@@ -149,35 +149,33 @@ for episode in tqdm(range(config['episodes'])):
             discounted_return = (config['gamma'] * discounted_return) + mean_reward
             undiscounted_return += mean_reward
         discounted_return_list.append(discounted_return)
-        print(discounted_return, undiscounted_return)
+        print(discounted_return)
         discounted_return = 0
         undiscounted_return = 0
 
     cumulative_reward.append(discounted_return_list)
 
 save_reward(args.RL_config+'_task'+str(args.task), next_version_path, cumulative_reward, config['agent_number'])
-save_gap(args.RL_config+'_task'+str(args.task)+'_CCE-GAP', next_version_path, v_array.tolist())
+if config['agent_number'] > 1:
+    for i in range(config['agent_number']):
+        save_gap(args.RL_config+'_task'+str(args.task)+'_CCE-GAP_agent'+str(i+1), next_version_path, v_array[i].tolist())
 
-if config['algorithm'] != 'MASAC':
-    pi_state_dict = agent.pi.state_dict()
-    old_pi_state_dict = agent.old_pi.state_dict()
-    # old_value_state_dict = agent.old_value.state_dict()
-    value_state_dict = agent.value.state_dict()
-    model_state_dict = {
-        'pi': pi_state_dict,
-        # 'old_pi': old_pi_state_dict,
-        # 'old_value': old_value_state_dict,
-        'value': value_state_dict
-    }
+if 'SAC' not in config['algorithm']:
+    model_state_dict = {}
+    for i, agent in enumerate(agents):
+        pi_state_dict = agent.pi.state_dict()
+        value_state_dict = agent.value.state_dict()
+        
+        model_state_dict[f'agent_{i}_pi'] = pi_state_dict
+        model_state_dict[f'agent_{i}_value'] = value_state_dict
 else:
-    actor_state_dict = agent.actor.state_dict()
-    critic_1_state_dict = agent.critic_1.state_dict()
-    critic_2_state_dict = agent.critic_2.state_dict()
-    model_state_dict = {
-        'actor': actor_state_dict,
-        'critic_1': critic_1_state_dict,
-        'critic_2': critic_2_state_dict,
-    }
+    model_state_dict = {}
+    for i, agent in enumerate(agents):
+        actor_state_dict = agent.actor.state_dict()
+        critic_state_dict = agent.critic_1.state_dict()
+        
+        model_state_dict[f'agent_{i}_actor'] = actor_state_dict
+        model_state_dict[f'agent_{i}_critic'] = critic_state_dict
 
 next_version_path = create_dir(base_path = 'checkpoints/')
 torch.save(model_state_dict, next_version_path+args.RL_config+'_task'+str(args.task)+'.ckpt')

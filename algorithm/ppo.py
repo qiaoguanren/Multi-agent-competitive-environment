@@ -6,7 +6,6 @@ from torch.distributions import Normal, Laplace
 import numpy as np
 from tqdm import tqdm
 from utils.normalizing_flow import MADE, BatchNormFlow, Reverse, FlowSequential
-from visualization.vis import vis_entropy
 
 
 def layer_init(layer, std=np.sqrt(2), bias_const=1.0):
@@ -27,7 +26,7 @@ class Policy(nn.Module):
     def forward(self, state, scale):
 
         noise = Normal(scale, 0.1)
-        mean = self.f(state) + noise.sample()
+        mean = self.f(state) + abs(noise.sample())
         mean = torch.cumsum(mean.reshape(-1,6,5,2), dim=-2)
         mean = mean[:, -1, :, :]
         mean = mean.flatten(start_dim = 1)
@@ -44,20 +43,13 @@ class ValueNet(nn.Module):
         super(ValueNet, self).__init__()
 
         self.f = nn.Sequential(
-            layer_init(nn.Linear(state_dim, hidden_dim)),
+            layer_init(nn.Linear(state_dim*agent_number, hidden_dim)),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
             layer_init(nn.Linear(hidden_dim, 1)),
         )
 
-        self.linear = nn.Linear(3*4*12, 4*12)
-
-    def forward(self, states, agent_number):
-
-        if agent_number > 1:
-        
-            states = self.linear(states.transpose(0,1))
-            states = states.transpose(0,1)
+    def forward(self, states):
 
         v = self.f(states)
         return v
@@ -94,30 +86,6 @@ class PPO:
                         {'params': self.pi.parameters(), 'lr': self.actor_lr, 'eps': 1e-5},
                         {'params': self.value.parameters(), 'lr': self.critic_lr, 'eps': 1e-5}
                     ])
-        # self._init_density_model(state_dim, self.hidden_dim)
-        
-    def _init_density_model(self, state_dim, hidden_dim):
-        # Creat density model
-        modules = []
-        for i in range(2):
-            modules += [
-                MADE(num_inputs=state_dim,
-                     num_hidden=hidden_dim,
-                     num_cond_inputs=None,
-                     ),
-                BatchNormFlow(state_dim, ),
-                Reverse(state_dim, )
-            ]
-        model = FlowSequential(*modules)
-
-        for module in model.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.orthogonal_(module.weight)
-                if hasattr(module, 'bias') and module.bias is not None:
-                    module.bias.data.fill_(0)
-        model.to(self.device)
-        self.density_model = model
-        self.density_optimizer = torch.optim.Adam(self.density_model.parameters(), lr=self.density_lr)
         
     def sample(self, transition, start_index):
 
@@ -146,7 +114,7 @@ class PPO:
         return action
 
     
-    def update(self, transition, buffer_batchsize, episode, version_path, scale):
+    def update(self, transition, scale):
         
         for epoch in tqdm(range(self.epochs)):
 
@@ -160,11 +128,11 @@ class PPO:
                 rewards = torch.stack(rewards, dim=0).view(-1,1)
                 dones = torch.stack(dones, dim=0).view(-1,1)
                 actions = torch.stack(actions, dim=0).flatten(start_dim=1)
-                rewards = rewards / (rewards.std() + 1e-5)
+                rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-5)
 
                 # td_error
                 with torch.no_grad():
-                    next_state_value = self.value(next_states, self.agent_number)
+                    next_state_value = self.value(next_states)
                     td_target = rewards + self.gamma * next_state_value * (1-dones)
                     # _, log_prob_game = self.density_model.log_probs(inputs=next_states,
                     #                                                 cond_inputs=None)
@@ -172,7 +140,7 @@ class PPO:
                     # beta_t = self.beta_coef / (log_prob_game)
                     
                     # td_target = td_target + beta_t
-                    td_value = self.value(states, self.agent_number)
+                    td_value = self.value(states)
 
                     td_delta = td_target - td_value
                 
@@ -203,27 +171,26 @@ class PPO:
                 surr1 = ratio * advantage
                 surr2 = advantage * torch.clamp(ratio, 1-self.eps, 1+self.eps)
 
-                value = self.value(states, self.agent_number)
+                value = self.value(states)
                 
                 # pi and value loss
                 pi_loss = torch.mean(-torch.min(surr1, surr2))
                 value_loss = torch.mean(F.mse_loss(value, td_target.detach()))
 
-                total_loss = (pi_loss + 0.5*value_loss - new_policy.entropy() * self.entropy_coef)
+                total_loss = (pi_loss + 2*value_loss - new_policy.entropy() * self.entropy_coef)
                 # total_loss = pi_loss + value_loss
                 # entropy_list.append(new_policy.entropy().mean().item())
 
                 self.optimizer.zero_grad()
                 total_loss.mean().backward()
-                nn.utils.clip_grad_norm_(self.pi.parameters(), 0.5)
+                nn.utils.clip_grad_norm_(self.pi.parameters(), 10)
                 self.optimizer.step()
 
-                if epoch%2 == 0:
-                    self.old_pi.load_state_dict(self.pi.state_dict())
                 # self.old_value.load_state_dict(self.value.state_dict())
 
                 start_index += 4
 
+            self.old_pi.load_state_dict(self.pi.state_dict())
             # if (episode+1)%100==0:
             #     if version_path:
             #         vis_entropy(entropy_list, episode, version_path)

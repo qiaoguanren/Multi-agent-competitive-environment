@@ -420,7 +420,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
 
           for i in range(0,110):
               if i<50:
-                  plot_traj_with_data(new_data,scenario_static_map,bounds=60,t=i)
+                  plot_traj_with_data(new_data,scenario_static_map,4,bounds=60,t=i)
               else:
                   if (110-i)%offset==0:
                       # true_trans_position_propose=new_true_trans_position_propose
@@ -444,7 +444,7 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                       #                     gt[..., :model.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask[:-1,...,:offset].unsqueeze(1)).sum(dim=-1)
                       # best_mode = l2_norm.argmin(dim=-1)
                       # best_mode=torch.randint(6,size=(new_data['agent']['num_nodes'],))
-                      best_mode = [sample_from_pdf(pi_eval) for _ in range(new_data['agent']['num_nodes'])]
+                      best_mode = pi_eval.argmax(dim=-1)
                       # best_mode[new_data["agent"]["category"] == 3] = max_index
                       # best_mode[-1] = 4
                       # best_mode[agent_index]=5
@@ -452,12 +452,12 @@ def generate_video(new_input_data,scenario_static_map, model, vid_path):
                           new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0], offset,anchor=(init_origin,init_theta,init_rot_mat)
                       )
                       pi_eval = F.softmax(auto_pred['pi'][eval_mask], dim=-1)
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=60,t=50-offset)
+                      plot_traj_with_data(new_data,scenario_static_map,4,bounds=60,t=50-offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                   else:
-                      plot_traj_with_data(new_data,scenario_static_map,bounds=60,t=50-offset+(i-50)%offset)
+                      plot_traj_with_data(new_data,scenario_static_map,4,bounds=60,t=50-offset+(i-50)%offset)
                       for j in range(6):
                           xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
                           plt.plot(xy[j, (i-50)%offset:, 0], xy[j, (i-50)%offset:, 1])
