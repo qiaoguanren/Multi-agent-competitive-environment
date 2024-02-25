@@ -25,8 +25,7 @@ class Policy(nn.Module):
     
     def forward(self, state, scale):
 
-        noise = Normal(scale, 0.1)
-        mean = self.f(state) + abs(noise.sample())
+        mean = self.f(state) + scale
         mean = torch.cumsum(mean.reshape(-1,6,5,2), dim=-2)
         mean = mean[:, -1, :, :]
         mean = mean.flatten(start_dim = 1)
