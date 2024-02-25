@@ -61,11 +61,11 @@ class PPO:
                  device, 
                  offset: int):
         self.hidden_dim =config['hidden_dim']
+        self.state_dim = state_dim
         # self.old_value = ValueNet(state_dim, hidden_dim).to(device)
         self.actor_lr = config['actor_learning_rate']
         self.critic_lr = config['critic_learning_rate']
         self.density_lr = config['density_learning_rate']
-        self.beta_coef = config['beta_coef']
         self.lamda = config['lamda'] #discount factor
         self.eps = config['eps'] #clipping parameter
         self.gamma = config['gamma'] # the factor of caculating GAE
