@@ -18,7 +18,7 @@ from av2.datasets.motion_forecasting.data_schema import (
     TrackCategory,
 )
 from datetime import datetime
-from utils.utils import get_auto_pred, get_transform_mat, sample_from_pdf
+from utils.utils import get_auto_pred, get_transform_mat
 
 
 _DRIVABLE_AREA_COLOR: Final[str] = "#7A7A7A"

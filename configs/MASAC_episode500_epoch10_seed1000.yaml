@@ -1,9 +1,9 @@
 algorithm: 'MASAC'
 seed: 1000
-agent_number: 4
+agent_number: 5
 actor_learning_rate : 0.00005
 critic_learning_rate: 0.0001
-alpha_learning_rate: 0.0001
+alpha_learning_rate: 0.00005
 gamma: 0.99
 lamda: 0.97
 hidden_dim: 128

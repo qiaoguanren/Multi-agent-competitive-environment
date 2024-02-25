@@ -2,7 +2,8 @@ import torch
 import math, random
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import Normal
+from torch.distributions import Laplace
+from torch.distributions.kl import kl_divergence
 import numpy as np
 from tqdm import tqdm
 from algorithm.SAC import SAC
@@ -92,7 +93,7 @@ class MASAC(SAC):
     def _init_density_model(self, state_dim, hidden_dim):
         # Creat density model
         modules = []
-        for i in range(2):
+        for i in range(3):
             modules += [
                 MADE(num_inputs=state_dim,
                      num_hidden=hidden_dim,
@@ -131,12 +132,12 @@ class MASAC(SAC):
                         self.density_optimizer.step()
 
         v_list = np.array([])
-        old_actions = None
+        pi_old = None
         
         for epoch in tqdm(range(self.epochs)):
             
             start_index = 0
-            old_actions_list = []
+            pi_old_list = []
             
             for i in range(8):
                 states, observations, actions, rewards, next_observations, next_states,dones= self.sample(transition, start_index, agent_index)
@@ -159,11 +160,11 @@ class MASAC(SAC):
                 critic_2_loss = torch.mean(
                     F.mse_loss(self.critic_2(states, actions), td_target.detach()))
 
-                _,_,new_actions, log_prob = self.actor(observations, scale)
+                mean,b,new_actions, log_prob_pi = self.actor(observations, scale)
                 if self.algorithm == 'CCE-MASAC':
-                    old_actions_list.append(new_actions.detach())
+                    pi_old_list.append(Laplace(mean, b))
                 
-                entropy = -log_prob
+                entropy = -log_prob_pi
                 q1_value = self.critic_1(states, new_actions)
                 q2_value = self.critic_2(states, new_actions)
                 self.critic_1_optimizer.zero_grad()
@@ -183,7 +184,7 @@ class MASAC(SAC):
                                             torch.min(q1_value, q2_value))
                 elif epoch > 0 and self.algorithm == 'CCE-MASAC':
                     actor_loss = torch.mean(-self.log_alpha.exp() * entropy -
-                                            torch.min(q1_value, q2_value) - 0.001 * F.kl_div(torch.log(new_actions), old_actions[i*(60//self.offset)*self.agent_number:(i+1)*(60//self.offset)*self.agent_number,:], reduction='batchmean'))
+                                            torch.min(q1_value, q2_value) - 0.001 * torch.mean(kl_divergence(Laplace(mean,b), pi_old_list[i])))
                 self.actor_optimizer.zero_grad()
                 actor_loss.backward()
                 self.actor_optimizer.step()
@@ -206,16 +207,12 @@ class MASAC(SAC):
                 self.soft_update(self.critic_1, self.target_critic_1)
                 self.soft_update(self.critic_2, self.target_critic_2)
             
-                if epoch == self.epochs - 1:
-                    value = torch.min(q1_value,
-                                  q2_value) + self.log_alpha.exp() * entropy
-                    v_list = np.append(v_list,  float(torch.mean(value.squeeze(-1))))
-
-            if self.algorithm == 'CCE-MASAC':
-                if old_actions_list:
-                    old_actions = torch.cat(old_actions_list, dim=0)
+                # if epoch == self.epochs - 1:
+                #     value = torch.min(q1_value,
+                #                   q2_value) + self.log_alpha.exp() * entropy
+                #     v_list = np.append(v_list,  float(torch.mean(value.squeeze(-1))))
         
-        return float(v_list.mean())
+        # return float(v_list.mean())
 
 
 

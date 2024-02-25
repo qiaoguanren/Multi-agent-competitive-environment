@@ -18,7 +18,7 @@ from transforms import TargetBuilder
 from pathlib import Path
 from visualization.vis import vis_reward
 from utils.geometry import wrap_angle
-from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, sample_from_pdf, create_dir, save_reward
+from utils.utils import get_transform_mat, get_auto_pred, add_new_agent, reward_function, seed_everything, create_dir, save_reward
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -31,7 +31,8 @@ parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
 parser.add_argument("--devices", type=int, default=1)
-parser.add_argument("--task", type=int, default=1)
+parser.add_argument("--scenario", type=int, default=1)
+parser.add_argument("--id", type=str, default='0a0ef009-9d44-4399-99e6-50004d345f34')
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
 parser.add_argument("--RL_config", default="PPO_episode500_epoch20_beta1e-1_seed2023", type=str)
 args = parser.parse_args()
@@ -39,6 +40,7 @@ args = parser.parse_args()
 with open("configs/"+args.RL_config+'.yaml', "r") as file:
         config = yaml.safe_load(file)
 file.close()
+seed_everything(config['seed'])
 pl.seed_everything(config['seed'], workers=True)
 print(args.RL_config)
 model = {
@@ -56,7 +58,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
+    val_dataset[[val_dataset.raw_file_names.index(args.id)]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -82,18 +84,43 @@ if isinstance(data, Batch):
     data['agent']['av_index'] += data['agent']['ptr'][:-1]
 
 # new_input_data=data
-v0_x = 1*math.cos(1.19)
-v0_y = math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
-v0_x = 1*math.cos(-1.95)
-v0_y = -math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
-v0_x = -1*math.cos(-0.33)
-v0_y = math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
-next_version_path = create_dir(base_path = 'figures/')
+if args.scenario == 2:
+    v0_x = 1*math.cos(1.19)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
+    v0_x = 1*math.cos(-1.95)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
+    v0_x = -1*math.cos(-0.33)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
+elif args.scenario == 1:
+    v0_x = 1*math.cos(1.9338)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.9338, 5257.3, 325)
+    v0_x = 1*math.cos(5.07)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5235, 385)
+    v0_x = 1*math.cos(5.07)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5229.7, 411)
+else:
+    new_input_data=add_new_agent(data,0, 0, 0, 1.57, -8340, -813)
+    v0_x = 1*math.cos(0.1)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,1.0, v0_x, v0_y, 0.1, -8379.8809, -828)
+    v0_x = -1*math.cos(3.18)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 3.18, -8315, -823)
+    v0_x = -1*math.cos(1.8)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 1.8, -8339, -863)
+    v0_x = 1*math.cos(4.76)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.75, v0_x, v0_y, 4.76, -8345, -793)
+# agent_index = -1
 cumulative_reward = []
-agent_index = -1
+agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
 
 offset=config['offset']
 if 'SAC' not in config['algorithm']:
@@ -209,7 +236,7 @@ for episode in tqdm(range(config['episodes'])):
 
     cumulative_reward.append(discounted_return)
 
-save_reward(args.RL_config+'_task'+str(args.task)+'_agent'+str(agent_index), next_version_path, cumulative_reward, config['agent_number'])
+save_reward(args.RL_config+'_scenario'+str(args.scenario)+'_agent'+str(agent_index), 'figures/', cumulative_reward, config['agent_number'])
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
 if 'SAC' not in config['algorithm']:

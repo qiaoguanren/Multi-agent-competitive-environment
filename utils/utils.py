@@ -1,4 +1,4 @@
-import torch, copy, math, os
+import torch, copy, math, os, random
 import numpy as np
 import csv
 from utils.geometry import wrap_angle
@@ -242,12 +242,14 @@ def reward_function(data,new_data,model,agent_index, agent_number):
         
         return reward1+reward2+reward3
 
-def sample_from_pdf(pdf):
-    pdf_distribution = torch.softmax(pdf, dim=-1)
-    
-    sampled_value = torch.multinomial(pdf_distribution, num_samples=1)
-    
-    return sampled_value.item()
+def seed_everything(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def create_dir(base_path):
     max_epoch = 0
@@ -261,9 +263,9 @@ def create_dir(base_path):
     os.makedirs(next_version_path, exist_ok=True)
     return next_version_path
 
-def save_reward(config_name, file_path, data_list, agent_number):
+def save_reward(config_name, figure_folder, data_list, agent_number):
     
-    file_path = '/home/guanren/Multi-agent-competitive-environment/'+file_path+config_name+'_agent-number'+str(agent_number)+'.csv'
+    file_path = '/home/guanren/Multi-agent-competitive-environment/'+figure_folder+config_name+'_agent-number'+str(agent_number)+'.csv'
 
     with open(file_path, mode='w', newline='') as file:
         writer = csv.writer(file)

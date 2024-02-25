@@ -14,7 +14,7 @@ from datasets import ArgoverseV2Dataset
 from predictors.autoval import AntoQCNet
 from predictors.environment import WorldModel
 from transforms import TargetBuilder
-from utils.utils import add_new_agent, process_batch, save_reward, create_dir, save_gap
+from utils.utils import add_new_agent, process_batch, save_reward, create_dir, seed_everything
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -27,7 +27,8 @@ parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
 parser.add_argument("--devices", type=int, default=1)
-parser.add_argument("--task", type=int, default=1)
+parser.add_argument("--scenario", type=int, default=1)
+parser.add_argument("--id", type=str, default='0a0ef009-9d44-4399-99e6-50004d345f34')
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
 parser.add_argument("--RL_config", default="MASAC_episode500_epoch20_beta1e-1_seed1234", type=str)
 args = parser.parse_args()
@@ -35,8 +36,9 @@ args = parser.parse_args()
 with open("configs/"+args.RL_config+'.yaml', "r") as file:
         config = yaml.safe_load(file)
 file.close()
-print(config['seed'])
 pl.seed_everything(config['seed'], workers=True)
+seed_everything(config['seed'])
+
 model = {
     "QCNet": AntoQCNet,
 }[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
@@ -52,7 +54,7 @@ val_dataset = {
 )
 
 dataloader = DataLoader(
-    val_dataset[[val_dataset.raw_file_names.index('0a8dd03b-02cf-4d7b-ae7f-c9e65ad3c900')]],
+    val_dataset[[val_dataset.raw_file_names.index(args.id)]],
     batch_size=args.batch_size,
     shuffle=False,
     num_workers=args.num_workers,
@@ -78,16 +80,42 @@ if isinstance(data, Batch):
     data['agent']['av_index'] += data['agent']['ptr'][:-1]
 
 new_input_data=data
-v0_x = 1*math.cos(1.19)
-v0_y = math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
-v0_x = 1*math.cos(-1.95)
-v0_y = -math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
-v0_x = -1*math.cos(-0.33)
-v0_y = math.sqrt(1**2-v0_x**2)
-new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
-next_version_path = create_dir(base_path = 'figures/')
+if args.scenario == 2:
+    v0_x = 1*math.cos(1.19)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
+    v0_x = 1*math.cos(-1.95)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
+    v0_x = -1*math.cos(-0.33)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
+elif args.scenario == 1:
+    v0_x = 1*math.cos(1.9338)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,0.7, v0_x, v0_y, 1.9338, 5257.3, 325)
+    v0_x = 1*math.cos(5.07)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.7, v0_x, v0_y, 5.07, 5235, 385)
+    v0_x = 1*math.cos(5.07)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.7, v0_x, v0_y, 5.07, 5229.7, 411)
+else:
+    v0_x = 1*math.cos(0.1)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,1.0, v0_x, v0_y, 0.1, -8379.8809, -828)
+    v0_x = -1*math.cos(3.18)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 3.18, -8315, -823)
+    v0_x = -1*math.cos(1.8)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 1.8, -8339, -863)
+    v0_x = 1*math.cos(4.76)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.75, v0_x, v0_y, 4.76, -8345, -793)
+    new_input_data=add_new_agent(new_input_data,0, 0, 0, 1.57, -8340, -813)
+
+# next_version_path = create_dir(base_path = 'figures/')
 cumulative_reward = []
 
 offset=config['offset']
@@ -131,10 +159,7 @@ for episode in tqdm(range(config['episodes'])):
         process_batch(batch, config, new_input_data, model, environment, agents, choose_agent, scale, offset, transition_list)
 
     for i in range(config['agent_number']):
-        v = agents[i].update(transition_list, config['buffer_batchsize'], scale, i)
-        if i == 0:
-            print(v)
-        v_array[i][episode] = v
+        agents[i].update(transition_list, config['buffer_batchsize'], scale, i)
 
     discounted_return_list = []
     discounted_return = 0
@@ -155,10 +180,10 @@ for episode in tqdm(range(config['episodes'])):
 
     cumulative_reward.append(discounted_return_list)
 
-save_reward(args.RL_config+'_task'+str(args.task), next_version_path, cumulative_reward, config['agent_number'])
-if config['agent_number'] > 1:
-    for i in range(config['agent_number']):
-        save_gap(args.RL_config+'_task'+str(args.task)+'_CCE-GAP_agent'+str(i+1), next_version_path, v_array[i].tolist())
+save_reward(args.RL_config+'_scenario'+str(args.scenario), 'figures/', cumulative_reward, config['agent_number'])
+# if config['agent_number'] > 1:
+#     for i in range(config['agent_number']):
+#         save_gap(args.RL_config+'_scenario'+str(args.scenario)+'_CCE-GAP_agent'+str(i+1), next_version_path, v_array[i].tolist())
 
 if 'SAC' not in config['algorithm']:
     model_state_dict = {}
@@ -177,6 +202,6 @@ else:
         model_state_dict[f'agent_{i}_actor'] = actor_state_dict
         model_state_dict[f'agent_{i}_critic'] = critic_state_dict
 
-next_version_path = create_dir(base_path = 'checkpoints/')
-torch.save(model_state_dict, next_version_path+args.RL_config+'_task'+str(args.task)+'.ckpt')
+# next_version_path = create_dir(base_path = 'checkpoints/')
+torch.save(model_state_dict, 'checkpoints/'+args.RL_config+'_scenario'+str(args.scenario)+'.ckpt')
 

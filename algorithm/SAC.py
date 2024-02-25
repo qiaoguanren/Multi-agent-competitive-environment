@@ -23,9 +23,7 @@ class Policy(nn.Module):
         )
     
     def forward(self, state, scale):
-
-        noise = Normal(scale, 0.1)
-        mean = self.f(state) + abs(noise.sample())
+        mean = self.f(state) + scale
         mean = torch.cumsum(mean.reshape(-1,6,5,2), dim=-2)
         mean = mean[:, -1, :, :]
         mean = mean.flatten(start_dim = 1)
@@ -35,7 +33,12 @@ class Policy(nn.Module):
         b = b[:, -1, :, :]
         b = b.flatten(start_dim = 1)
 
+        # epsilon = 1e-6
+        # mean = torch.where(torch.isnan(mean), torch.full_like(mean, epsilon), mean)
+        # b = torch.where(torch.isnan(b), torch.full_like(b, epsilon), b)
+
         dist = Laplace(mean, b)
+
         normal_sample = dist.rsample()
         log_prob = dist.log_prob(normal_sample)
         log_prob = log_prob - torch.log(1 - torch.tanh(normal_sample).pow(2) + 1e-7)
@@ -156,8 +159,6 @@ class SAC:
                                   q2_value) + self.log_alpha.exp() * entropy
 
             td_target = rewards + self.gamma * next_value * (1 - dones)
-            
-            td_target = td_target
 
         return td_target
     
@@ -230,7 +231,5 @@ class SAC:
 
                 self.soft_update(self.critic_1, self.target_critic_1)
                 self.soft_update(self.critic_2, self.target_critic_2)
-        
-        return 1
 
         

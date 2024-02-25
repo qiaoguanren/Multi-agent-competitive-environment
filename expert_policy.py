@@ -29,7 +29,7 @@ parser.add_argument("--pin_memory", type=bool, default=True)
 parser.add_argument("--persistent_workers", type=bool, default=True)
 parser.add_argument("--accelerator", type=str, default="auto")
 parser.add_argument("--devices", type=int, default=1)
-parser.add_argument("--task", type=int, default=2)
+parser.add_argument("--scenario", type=int, default=2)
 parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
 parser.add_argument("--RL_config", default="PPO_episode500_epoch20_beta1e-1_seed2023.yaml", type=str)
 args = parser.parse_args()
@@ -89,13 +89,14 @@ new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
 v0_x = -1*math.cos(-0.33)
 v0_y = math.sqrt(1**2-v0_x**2)
 new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
-model_state_dict = torch.load('checkpoints/version_31/CCE-MASAC_episode500_epoch10_beta1e-2_seed1234_task2.ckpt')
+model_state_dict = torch.load('checkpoints/version_5/MASAC_episode500_epoch10_seed1234_task2.ckpt')
 
-next_version_path = create_dir(base_path = 'figures/')
+# next_version_path = create_dir(base_path = 'figures/')
 cumulative_reward = [[] for _ in range(new_input_data['agent']['num_nodes'])]
 
 choose_agent = []    
-agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
+agent_index = -1
+# agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
 choose_agent.append(agent_index)
 for i in range(config['agent_number']-1):
     choose_agent.append(data['agent']['num_nodes']+i)
@@ -233,19 +234,23 @@ with torch.no_grad():
 
         s = []
         a = []
+        o = []
         for i in range(config['buffer_batchsize']):
             for j in range(config['agent_number']):
                   s+=transition_list[i]['states'][j]
-            a += transition_list[i]['actions'][0]
+            o += transition_list[i]['states'][-1]
+            a += transition_list[i]['actions'][-1]
         states_critic_input = torch.stack(s, dim=0).reshape(-1,config['agent_number']*model.num_modes*config['hidden_dim']).type(torch.FloatTensor).to(model.device)
         actions_critic_input = torch.stack(a, dim=0).flatten(start_dim=1).reshape(-1, 2*5).type(torch.FloatTensor).to(model.device)
+        observations = torch.stack(o, dim=0).reshape(-1,model.num_modes*config['hidden_dim']).type(torch.FloatTensor).to(model.device)
 
-        v = agents[0].critic_1(states_critic_input, actions_critic_input)
-        # _,_,actions, log_prob = agents[0].actor(states, scale)
+        q = agents[-1].critic_1(states_critic_input, actions_critic_input)
+        _,_,actions, log_prob = agents[-1].actor(observations, scale)
+        v = q - agents[-1].log_alpha.exp() * log_prob
         v = torch.mean(v.squeeze(-1)).item()
         print(v)
         v_array = np.append(v_array, v)
 
 # save_reward('expert_'+args.RL_config+'_task'+str(args.task), next_version_path, cumulative_reward, config['agent_number'])
-save_gap('expert_'+args.RL_config+'_task'+str(args.task)+'_CCE-GAP_agent1', next_version_path, v_array.tolist())
+# save_gap('expert_'+args.RL_config+'_task'+str(args.task)+'_CCE-GAP_agent1', next_version_path, v_array.tolist())
 
