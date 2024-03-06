@@ -165,7 +165,6 @@ class QCNet(pl.LightningModule):
                    "pred":new_pred,
                    "ptr":ptr}
         pred = self.gf_decoder(new_input)
-        pred={k:v.requires_grad_() for k,v in pred.items()}
         return pred
 
     def training_step(self,
@@ -183,7 +182,7 @@ class QCNet(pl.LightningModule):
             ptr=torch.tensor(list(map(sum,torch.tensor_split((data['agent']['category']>1),data['agent']['ptr'].cpu()[1:-1])))).cumsum(0)
             start_points=torch.nested.nested_tensor(list(torch.tensor_split(start_points,ptr[:-1]))).to_padded_tensor(.0)
             trajectories = outputs[f'level_{k}_interactions']
-            scores = outputs[f'level_{k}_scores'][result_mask]
+            scores = outputs[f'level_{k}_scores'][result_mask].requires_grad_()
             gt = data['agent']['target'][score_mask,..., :2]
             imi_loss=self.imitation_loss(trajectories[result_mask], scores, gt)
             loss+=imi_loss

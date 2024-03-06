@@ -11,6 +11,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import os
+os.environ['CUDA_VISIBLE_DEVICES']='4'
 from argparse import ArgumentParser
 
 import pytorch_lightning as pl
@@ -20,9 +22,9 @@ from pytorch_lightning.strategies import DDPStrategy
 
 from datamodules import ArgoverseV2DataModule
 from predictors.qcnet_gf_decoder import QCNet
+
 import torch
-import os
-os.environ['CUDA_VISIBLE_DEVICES']='6'
+
 
 if __name__ == '__main__':
     pl.seed_everything(2023, workers=True)
@@ -54,7 +56,7 @@ if __name__ == '__main__':
         'argoverse_v2': ArgoverseV2DataModule,
     }[args.dataset](**vars(args))
     model_checkpoint = ModelCheckpoint(monitor='val_minFDE', save_top_k=5, mode='min')
-    pretrained_dict = torch.load("checkpoints/QCNet_AV2.ckpt")['state_dict']
+    pretrained_dict = torch.load("/home/guanren/Multi-agent-competitive-environment/checkpoints/QCNet_AV2.ckpt")['state_dict']
     pretrained_dict = dict((key,value) for key, value in pretrained_dict.items() if not key.startswith("decoder.y_emb"))
     model_dict = model.state_dict()
     model_dict.update(pretrained_dict) 
@@ -68,6 +70,6 @@ if __name__ == '__main__':
 
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
     trainer = pl.Trainer(accelerator=args.accelerator, devices=args.devices,
-                         strategy=DDPStrategy(find_unused_parameters=False, gradient_as_bucket_view=True),
+                         strategy=DDPStrategy(find_unused_parameters=True, gradient_as_bucket_view=True),
                          callbacks=[model_checkpoint, lr_monitor], max_epochs=args.max_epochs)
     trainer.fit(model, datamodule)
