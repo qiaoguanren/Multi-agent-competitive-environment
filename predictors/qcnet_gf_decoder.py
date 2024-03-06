@@ -165,6 +165,7 @@ class QCNet(pl.LightningModule):
                    "pred":new_pred,
                    "ptr":ptr}
         pred = self.gf_decoder(new_input)
+        pred={k:v.requires_grad_() for k,v in pred.items()}
         return pred
 
     def training_step(self,
@@ -190,7 +191,8 @@ class QCNet(pl.LightningModule):
             loss += 0.1 * inter_loss
             self.log(f'level{k}_imitation_loss', imi_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
             self.log(f'level{k}_inter_loss', inter_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        # loss = reg_loss_propose + reg_loss_refine + cls_loss
+
+        return loss
 
     def interaction_loss(self,trajectories, last_trajectories, neighbors_mask):
         B, N, M, T, _ = trajectories.shape
@@ -252,6 +254,7 @@ class QCNet(pl.LightningModule):
 
         score_loss = F.cross_entropy(scores, best_mode, label_smoothing=0.2)
         loss += score_loss
+        loss = loss.mean()
         return loss
     def validation_step(self,
                         data,
