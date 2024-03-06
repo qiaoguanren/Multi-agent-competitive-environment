@@ -191,7 +191,6 @@ class QCNet(pl.LightningModule):
             self.log(f'level{k}_imitation_loss', imi_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
             self.log(f'level{k}_inter_loss', inter_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
         # loss = reg_loss_propose + reg_loss_refine + cls_loss
-        return loss
 
     def interaction_loss(self,trajectories, last_trajectories, neighbors_mask):
         B, N, M, T, _ = trajectories.shape
