@@ -172,49 +172,88 @@ class QCNet(pl.LightningModule):
                       batch_idx):
         if isinstance(data, Batch):
             data['agent']['av_index'] += data['agent']['ptr'][:-1]
-        reg_mask = data['agent']['predict_mask'][:, self.num_historical_steps:]
-        cls_mask = data['agent']['predict_mask'][:, -1]
-        pred = self(data)
-        if self.output_head:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['loc_propose_head'],
-                                      pred['scale_propose_pos'][..., :self.output_dim],
-                                      pred['conc_propose_head']], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['loc_refine_head'],
-                                     pred['scale_refine_pos'][..., :self.output_dim],
-                                     pred['conc_refine_head']], dim=-1)
-        else:
-            traj_propose = torch.cat([pred['loc_propose_pos'][..., :self.output_dim],
-                                      pred['scale_propose_pos'][..., :self.output_dim]], dim=-1)
-            traj_refine = torch.cat([pred['loc_refine_pos'][..., :self.output_dim],
-                                     pred['scale_refine_pos'][..., :self.output_dim]], dim=-1)
-        pi = pred['pi']
-        gt = torch.cat([data['agent']['target'][..., :self.output_dim], data['agent']['target'][..., -1:]], dim=-1)
-        l2_norm = (torch.norm(traj_propose[..., :self.output_dim] -
-                              gt[..., :self.output_dim].unsqueeze(1), p=2, dim=-1) * reg_mask.unsqueeze(1)).sum(dim=-1)
-        best_mode = l2_norm.argmin(dim=-1)
-        traj_propose_best = traj_propose[torch.arange(traj_propose.size(0)), best_mode]
-        traj_refine_best = traj_refine[torch.arange(traj_refine.size(0)), best_mode]
-        reg_loss_propose = self.reg_loss(traj_propose_best,
-                                         gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_propose = reg_loss_propose.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_propose = reg_loss_propose.mean()
-        reg_loss_refine = self.reg_loss(traj_refine_best,
-                                        gt[..., :self.output_dim + self.output_head]).sum(dim=-1) * reg_mask
-        reg_loss_refine = reg_loss_refine.sum(dim=0) / reg_mask.sum(dim=0).clamp_(min=1)
-        reg_loss_refine = reg_loss_refine.mean()
-        cls_loss = self.cls_loss(pred=traj_refine[:, :, -1:].detach(),
-                                 target=gt[:, -1:, :self.output_dim + self.output_head],
-                                 prob=pi,
-                                 mask=reg_mask[:, -1:]) * cls_mask
-        cls_loss = cls_loss.sum() / cls_mask.sum().clamp_(min=1)
-        self.log('train_reg_loss_propose', reg_loss_propose, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        self.log('train_reg_loss_refine', reg_loss_refine, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        self.log('train_cls_loss', cls_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
-        loss = reg_loss_propose + reg_loss_refine + cls_loss
+        outputs = self(data)
+        levels = len(outputs.keys()) // 2
+        loss=0
+        for k in range(1,levels):
+            score_mask=data['agent']['category']>1
+            result_mask=torch.nested.nested_tensor(list(map(lambda x: torch.ones(sum(x)),torch.tensor_split((data['agent']['category']>1),data['agent']['ptr'].cpu()[1:-1])))).to_padded_tensor(0).bool()
+            start_points=data['agent']['position'][data['agent']['category']>1,self.num_historical_steps-1,:2]
+            ptr=torch.tensor(list(map(sum,torch.tensor_split((data['agent']['category']>1),data['agent']['ptr'].cpu()[1:-1])))).cumsum(0)
+            start_points=torch.nested.nested_tensor(list(torch.tensor_split(start_points,ptr[:-1]))).to_padded_tensor(.0)
+            trajectories = outputs[f'level_{k}_interactions']
+            scores = outputs[f'level_{k}_scores'][result_mask]
+            gt = data['agent']['target'][score_mask,..., :2]
+            imi_loss=self.imitation_loss(trajectories[result_mask], scores, gt)
+            loss+=imi_loss
+            inter_loss = self.interaction_loss(outputs[f'level_{k}_interactions'][...,:2]+start_points[:,:,None,None], outputs[f'level_{k-1}_interactions'][...,:2]+start_points[:,:,None,None], result_mask)
+            loss += 0.1 * inter_loss
+            self.log(f'level{k}_imitation_loss', imi_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+            self.log(f'level{k}_inter_loss', inter_loss, prog_bar=False, on_step=True, on_epoch=True, batch_size=1)
+        # loss = reg_loss_propose + reg_loss_refine + cls_loss
         return loss
 
+    def interaction_loss(self,trajectories, last_trajectories, neighbors_mask):
+        B, N, M, T, _ = trajectories.shape
+        # neighbors_to_ego = []
+        neighbors_to_neighbors = []
+        neighbors_mask = neighbors_mask.logical_not().cuda()
+        mask = torch.zeros(B, N, N).cuda()
+        mask = torch.masked_fill(mask, neighbors_mask[:, :, None], 1)
+        mask = torch.masked_fill(mask, neighbors_mask[:,None, : ], 1)
+        mask = torch.masked_fill(mask, torch.eye(N)[None, :, :].bool().to(neighbors_mask.device), 1)
+        mask = mask.unsqueeze(-1).unsqueeze(-1) * torch.ones(1, 1, M, M).to(neighbors_mask.device)
+        mask = mask.permute(0, 1, 3, 2, 4).reshape(B, (N)*M, (N)*M)
+        for t in range(T):
+            # AV-agents last level
+            # ego_p = trajectories[:, 0, :, t]
+            # last_neighbors_p = last_trajectories[:, 1:, :, t]
+            # last_neighbors_p = last_neighbors_p.reshape(B, -1, 2)
+            # dist_to_ego = torch.cdist(ego_p, last_neighbors_p)
+            # n_mask = mask[:,1:].unsqueeze(-1).expand(-1, -1, M).reshape(B, 1, -1).cuda()
+            # dist_to_ego = torch.masked_fill(dist_to_ego, n_mask, 1000)
+            # neighbors_to_ego.append(torch.min(dist_to_ego, dim=-1).values)
+
+            # agents-agents last level
+            neighbors_p = trajectories[:, :, :, t, :2].reshape(B, -1, 2)
+            last_neighbors_p = last_trajectories[:, :, :, t].reshape(B, -1, 2)
+            dist_neighbors = torch.cdist(neighbors_p, last_neighbors_p)
+            dist_neighbors = torch.masked_fill(dist_neighbors, mask.bool(), 1000)
+            neighbors_to_neighbors.append(torch.min(dist_neighbors, dim=-1).values)
+
+        # neighbors_to_ego = torch.stack(neighbors_to_ego, dim=-1)
+        # PF_to_ego = 1.0 / (neighbors_to_ego + 1)
+        # PF_to_ego = PF_to_ego * (neighbors_to_ego < 3) # safety threshold
+        # PF_to_ego = PF_to_ego.sum(-1).sum(-1).mean()
+            
+        neighbors_to_neighbors = torch.stack(neighbors_to_neighbors, dim=-1)
+        PF_to_neighbors = 1.0 / (neighbors_to_neighbors + 1)
+        PF_to_neighbors = PF_to_neighbors * (neighbors_to_neighbors < 3) # safety threshold
+        PF_to_neighbors = PF_to_neighbors.sum(-1).mean(-1).mean() 
+
+        return PF_to_neighbors
+
+
+    def imitation_loss(self, trajectories, scores, gt):
+        distance = torch.norm(trajectories[ ..., :2] - gt[:,None], dim=-1)
+        best_mode = torch.argmin(distance.mean(-1), dim=-1)
+        mu = trajectories[..., :2]
+        best_mode_mu = mu[torch.arange(mu.size(0)),best_mode]
+        dx = gt[..., 0] - best_mode_mu[..., 0]
+        dy = gt[..., 1] - best_mode_mu[..., 1]
+            
+        cov = trajectories[..., 2:]
+        best_mode_cov = cov[torch.arange(mu.size(0)),best_mode]
+        log_std_x = torch.clamp(best_mode_cov[..., 0], -2, 2)
+        log_std_y = torch.clamp(best_mode_cov[..., 1], -2, 2)
+        std_x = torch.exp(log_std_x)
+        std_y = torch.exp(log_std_y)
+        gmm_loss = log_std_x + log_std_y + 0.5 * (torch.square(dx/std_x) + torch.square(dy/std_y))
+        loss = torch.mean(gmm_loss) + torch.mean(gmm_loss[:, 0])
+
+        score_loss = F.cross_entropy(scores, best_mode, label_smoothing=0.2)
+        loss += score_loss
+        return loss
     def validation_step(self,
                         data,
                         batch_idx):

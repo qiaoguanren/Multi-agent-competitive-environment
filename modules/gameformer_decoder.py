@@ -244,7 +244,7 @@ class Decoder(nn.Module):
         input=torch.nested.nested_tensor(list(torch.tensor_split( self.embedmap(encoder_inputs['encodings']),encoder_inputs['ptr'][:-1])))
         encodings=input.to_padded_tensor(0)
         masks=torch.ones_like(input).to_padded_tensor(0).all(-1)
-
+        masks=~masks
         last_content = self.initial_stage(0, encodings, masks)
         decoder_outputs['level_0_interactions'] = last_level
         decoder_outputs['level_0_scores'] = last_scores
