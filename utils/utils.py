@@ -167,6 +167,7 @@ def add_new_agent(data, a, v0_x, v0_y, heading, x0, y0):
     # new_heading[:]=0.3898
     new_heading[:]=heading
 
+
     for i in range(110):
 
         a_x = acceleration*math.cos(new_heading[i])
@@ -229,7 +230,7 @@ def reward_function(data,new_data,model,agent_index, agent_number):
         if travel_distance<total_distance:
             reward1 = math.log(travel_distance/total_distance)
         else:
-            reward1 = l2_norm_current_distance**2*2
+            reward1 = l2_norm_current_distance
         
         # for i in range(new_data['agent']['num_nodes']):
         #     if i==agent_index:
@@ -238,7 +239,7 @@ def reward_function(data,new_data,model,agent_index, agent_number):
         #     if distance < 5e-2:
         #         break
         # if distance < 5e-2:
-        #     reward2 = -10
+        #     reward2 = -100
         
         return reward1+reward2+reward3
 
@@ -354,6 +355,11 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
                 action = auto_pred['loc_refine_pos'][choose_agent[i],action_suggest_index_list[i],:offset, :2].flatten(start_dim = 1)
                 action_list.append(action)
 
+            ground_b_list = []
+            for i in range(config['agent_number']):
+                ground_b = auto_pred['scale_refine_pos'][choose_agent[i],action_suggest_index_list[i],:offset, :2].flatten(start_dim = 1)
+                ground_b_list.append(ground_b)
+
             new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                 new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
             )
@@ -366,6 +372,7 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
                 transition_list[batch]['states'][i].append(state_temp_list[i])
                 transition_list[batch]['actions'][i].append(action_list[i])
                 transition_list[batch]['next_states'][i].append(next_state_temp_list[i])
+                transition_list[batch]['ground_b'][i].append(ground_b_list[i])
             if timestep == model.num_future_steps - offset:
                 transition_list[batch]['dones'].append(torch.tensor(1).cuda())
             else:

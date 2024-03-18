@@ -14,7 +14,7 @@ from datasets import ArgoverseV2Dataset
 from predictors.autoval import AntoQCNet
 from predictors.environment import WorldModel
 from transforms import TargetBuilder
-from utils.utils import add_new_agent, process_batch, save_reward, create_dir, seed_everything
+from utils.utils import add_new_agent, process_batch, save_reward, seed_everything, save_gap
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -29,7 +29,7 @@ parser.add_argument("--accelerator", type=str, default="auto")
 parser.add_argument("--devices", type=int, default=1)
 parser.add_argument("--scenario", type=int, default=1)
 parser.add_argument("--id", type=str, default='0a0ef009-9d44-4399-99e6-50004d345f34')
-parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
+parser.add_argument("--ckpt_path", default="checkpoints/epoch=15-step=49984.ckpt", type=str)
 parser.add_argument("--RL_config", default="MASAC_episode500_epoch20_beta1e-1_seed1234", type=str)
 args = parser.parse_args()
 
@@ -81,45 +81,56 @@ if isinstance(data, Batch):
 
 new_input_data=data
 if args.scenario == 2:
-    v0_x = 1*math.cos(1.19)
+    v0_x = 1*math.cos(1.28)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
+    new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 1.28, 2673, -2410)
     v0_x = 1*math.cos(-1.95)
     v0_y = -math.sqrt(1**2-v0_x**2)
     new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
     v0_x = -1*math.cos(-0.33)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
+    new_input_data=add_new_agent(new_input_data,-0.6, v0_x, v0_y, -0.33, 2725, -2381)
 elif args.scenario == 1:
     v0_x = 1*math.cos(1.9338)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.7, v0_x, v0_y, 1.9338, 5257.3, 325)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.9338, 5250, 345)
     v0_x = 1*math.cos(5.07)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.7, v0_x, v0_y, 5.07, 5235, 385)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5227, 407)
     v0_x = 1*math.cos(5.07)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.7, v0_x, v0_y, 5.07, 5229.7, 411)
-else:
+    new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 5.07, 5229.7, 411)
+elif args.scenario == 4:
     v0_x = 1*math.cos(0.1)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,1.0, v0_x, v0_y, 0.1, -8379.8809, -828)
+    new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 0.1, -8379.8809, -827)
     v0_x = -1*math.cos(3.18)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 3.18, -8311, -823)
+    new_input_data=add_new_agent(new_input_data,0.8, v0_x, v0_y, 3.18, -8315, -823)
     v0_x = -1*math.cos(1.8)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 1.8, -8339, -863)
+    new_input_data=add_new_agent(new_input_data,0.6, v0_x, v0_y, 1.8, -8339, -863)
     v0_x = 1*math.cos(4.76)
     v0_y = -math.sqrt(1**2-v0_x**2)
     new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 4.76, -8345, -793)
+    new_input_data=add_new_agent(new_input_data,0, 0, 0, 1.57, -8340, -813)
+else:
+    v0_x = 1*math.cos(-0.5)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,0.1, v0_x, v0_y, -0.5, 691, -904)
+    v0_x = 1*math.cos(1.3)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, 1.3, 695, -950)
+    v0_x = 1*math.cos(2.9)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, 2.9, 735, -919)
     new_input_data=add_new_agent(new_input_data,0, 0, 0, 1.57, -8340, -813)
 
 # next_version_path = create_dir(base_path = 'figures/')
 cumulative_reward = []
 
 offset=config['offset']
-if 'MASAC' not in config['algorithm']:
+if 'MAPPO' in config['algorithm']:
     agents = [MAPPO(
                 state_dim=model.num_modes*config['hidden_dim'],
                 action_dim = model.output_dim*offset*6,
@@ -153,6 +164,7 @@ for episode in tqdm(range(config['episodes'])):
                 'actions': [[]for _  in range(config['agent_number'])],
                 'next_states': [[]for _  in range(config['agent_number'])],
                 'rewards': [[]for _  in range(config['agent_number'])],
+                'ground_b': [[] for _  in range(config['agent_number'])],
                 'dones': []} for _ in range(config['buffer_batchsize'])]
     
     for batch in range(config['buffer_batchsize']):
@@ -160,6 +172,7 @@ for episode in tqdm(range(config['episodes'])):
 
     for i in range(config['agent_number']):
         agents[i].update(transition_list, config['buffer_batchsize'], scale, i)
+        # v_array[i][episode] = v
 
     discounted_return_list = []
     discounted_return = 0
@@ -180,10 +193,10 @@ for episode in tqdm(range(config['episodes'])):
 
     cumulative_reward.append(discounted_return_list)
 
-save_reward(args.RL_config+'_scenario'+str(args.scenario), 'figures/', cumulative_reward, config['agent_number'])
+save_reward(args.RL_config+'_scenario'+str(args.scenario), 'figures/version_7/', cumulative_reward, config['agent_number'])
 # if config['agent_number'] > 1:
 #     for i in range(config['agent_number']):
-#         save_gap(args.RL_config+'_scenario'+str(args.scenario)+'_CCE-GAP_agent'+str(i+1), next_version_path, v_array[i].tolist())
+#         save_gap(args.RL_config+'_scenario'+str(args.scenario)+'_CCE-GAP_agent'+str(i+1), 'figures/version_6/', v_array[i].tolist())
 
 if 'SAC' not in config['algorithm']:
     model_state_dict = {}
@@ -203,5 +216,5 @@ else:
         model_state_dict[f'agent_{i}_critic'] = critic_state_dict
 
 # next_version_path = create_dir(base_path = 'checkpoints/')
-torch.save(model_state_dict, 'checkpoints/'+args.RL_config+'_scenario'+str(args.scenario)+'.ckpt')
+torch.save(model_state_dict, 'checkpoints/version_7/'+args.RL_config+'_scenario'+str(args.scenario)+'.ckpt')
 

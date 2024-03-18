@@ -85,40 +85,52 @@ if isinstance(data, Batch):
 
 # new_input_data=data
 if args.scenario == 2:
-    v0_x = 1*math.cos(1.19)
+    v0_x = 1*math.cos(1.28)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.19, 2665, -2410)
+    new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 1.28, 2673, -2410)
     v0_x = 1*math.cos(-1.95)
     v0_y = -math.sqrt(1**2-v0_x**2)
     new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
     v0_x = -1*math.cos(-0.33)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2386)
+    new_input_data=add_new_agent(new_input_data,-0.6, v0_x, v0_y, -0.33, 2725, -2381)
 elif args.scenario == 1:
     v0_x = 1*math.cos(1.9338)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.9338, 5257.3, 325)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.9338, 5248, 350)
     v0_x = 1*math.cos(5.07)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5235, 385)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5227, 407)
     v0_x = 1*math.cos(5.07)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5229.7, 411)
-else:
+    new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 5.07, 5229.7, 411)
+elif args.scenario == 3:
     new_input_data=add_new_agent(data,0, 0, 0, 1.57, -8340, -813)
     v0_x = 1*math.cos(0.1)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.0, v0_x, v0_y, 0.1, -8379.8809, -828)
+    new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 0.1, -8379.8809, -827)
     v0_x = -1*math.cos(3.18)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 3.18, -8311, -823)
+    new_input_data=add_new_agent(new_input_data,0.8, v0_x, v0_y, 3.18, -8315, -823)
     v0_x = -1*math.cos(1.8)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 1.8, -8339, -863)
+    new_input_data=add_new_agent(new_input_data,0.6, v0_x, v0_y, 1.8, -8339, -863)
     v0_x = 1*math.cos(4.76)
     v0_y = -math.sqrt(1**2-v0_x**2)
     new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 4.76, -8345, -793)
-agent_index = -1
+else:
+    new_input_data=add_new_agent(data,0, 0, 0, 1.57, -8340, -813)
+    v0_x = 1*math.cos(-0.5)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, -0.5, 691, -904)
+    v0_x = 1*math.cos(1.3)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, 1.3, 695, -950)
+    v0_x = 1*math.cos(2.9)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, 2.9, 735, -919)
+     
+agent_index = -3
 cumulative_reward = []
 # agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
 
@@ -236,7 +248,7 @@ for episode in tqdm(range(config['episodes'])):
 
     cumulative_reward.append(discounted_return)
 
-save_reward(args.RL_config+'_scenario'+str(args.scenario)+'_agent'+str(agent_index), 'figures/', cumulative_reward, config['agent_number'])
+save_reward(args.RL_config+'_scenario'+str(args.scenario)+'_agent'+str(agent_index), 'figures/version_5/', cumulative_reward, config['agent_number'])
 # vis_reward(new_data,cumulative_reward,agent_index+1,config['episodes'],next_version_path)
 
 if 'SAC' not in config['algorithm']:
@@ -252,4 +264,3 @@ if 'SAC' not in config['algorithm']:
 
     next_version_path = create_dir(base_path = 'checkpoints/')
     torch.save(model_state_dict, next_version_path+args.RL_config+'.ckpt')
-

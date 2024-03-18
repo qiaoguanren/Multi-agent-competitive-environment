@@ -309,7 +309,7 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, agent_number, timestep: int
             track_bounds = (x_min, x_max, y_min, y_max)
             track_color = _FOCAL_AGENT_COLOR
 
-            _plot_polylines([actor_trajectory], color=track_color, line_width=2)
+            _plot_polylines([actor_trajectory], color='black', line_width=2)
             ax.arrow(actor_trajectory[-1,0], actor_trajectory[-1,1], data['agent']['velocity'][i,timestep,0].cpu(),data['agent']['velocity'][i,timestep,1].cpu(),
               width=0.1,
               length_includes_head=True,
@@ -319,16 +319,17 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, agent_number, timestep: int
               ec='b')
         elif i==data['agent']['av_index']:
             track_color = _AV_COLOR
-        elif i==data['agent']['num_nodes']-agent_number+1:
-                _plot_polylines([actor_trajectory], color="black", line_width=2)
+        elif i==data['agent']['num_nodes']-agent_number and i!=data['agent']['num_nodes']-1:
+        # elif i==data['agent']['num_nodes']-agent_number+1:
                 track_color = _FOCAL_AGENT_COLOR
+                _plot_polylines([actor_trajectory], color="black", line_width=2)
                 ax.arrow(actor_trajectory[-1,0], actor_trajectory[-1,1], data['agent']['velocity'][i,timestep,0].cpu(),data['agent']['velocity'][i,timestep,1].cpu(),
                 width=0.1,
                 length_includes_head=True,
                 head_width=0.75,
                 head_length=1,
                 fc='r',
-                ec='y')
+                ec='b')
                 agent_number -= 1
         elif data['agent']['type'][i]>4:
             continue
@@ -360,13 +361,14 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, agent_number, timestep: int
                 "o",
                 color=track_color,
                 markersize=4,
+
             )
 
     return track_bounds
 
 
 
-def plot_traj_with_data(data,scenario_static_map,agent_number,t=50,bounds=80.0):
+def  plot_traj_with_data(data,scenario_static_map,agent_number,t=50,bounds=80.0):
     plot_bounds = (0, 0, 0, 0)
 
     _, ax = plt.subplots()
@@ -375,18 +377,29 @@ def plot_traj_with_data(data,scenario_static_map,agent_number,t=50,bounds=80.0):
     cur_plot_bounds = _plot_actor_tracks_with_data(ax, data, agent_number, t)
     if cur_plot_bounds:
         plot_bounds = cur_plot_bounds
-        # print(plot_bounds)
     plt.xlim(
         # 5256 - bounds,
         # 5265 + bounds,
-        plot_bounds[0] - bounds,
-        plot_bounds[1] + bounds,
+        # 2640 - bounds,
+        # 2670 + bounds,
+        # 690 - bounds,
+        # 695 + bounds,
+        -8339.5 - bounds,
+        -8339.5 + bounds,
+        # plot_bounds[0] - bounds,
+        # plot_bounds[1] + bounds,
     )
     plt.ylim(
         # 295 - bounds,
         # 330 + bounds,
-        plot_bounds[2] - bounds,
-        plot_bounds[3] + bounds,
+        # -2365 - bounds,
+        # -2360 + bounds,
+        # -911 - bounds,
+        # -900 + bounds,
+        -840 - bounds,
+        -830 + bounds,
+        # plot_bounds[2] - bounds,
+        # plot_bounds[3] + bounds,
     )
     plt.gca().set_aspect("equal", adjustable="box")
     plt.gca().set_axis_off()
@@ -394,6 +407,7 @@ def plot_traj_with_data(data,scenario_static_map,agent_number,t=50,bounds=80.0):
     plt.margins(0, 0)
     plt.gca().xaxis.set_major_locator(plt.NullLocator())
     plt.gca().yaxis.set_major_locator(plt.NullLocator())
+    # plt.savefig("/home/guanren/Multi-agent-competitive-environment/results/scenario1_raw.png", bbox_inches="tight", pad_inches=0)
 
 def generate_video(new_input_data,scenario_static_map, model, vid_path):
     frames = []
@@ -500,18 +514,3 @@ def vis_reward(config_name, algorithm, data,cumulative_reward,agent_index,episod
         plt.ylabel("Exploitability", fontsize=24)
         plt.legend()
         plt.savefig('/home/guanren/Multi-agent-competitive-environment/'+version_path+f'reward_{config_name}.png')
-
-
-def vis_entropy(entropy_list, episode, version_path):
-    x = range(len(entropy_list))
-    plt.figure(figsize=(10, 10))
-    plt.plot(x, entropy_list, color='r', label=f'focal_agent',linewidth = 3)
-
-    plt.title('Actor Entropy')
-    plt.xlabel("Epoch")
-    plt.ylabel("Entropy")
-    plt.legend()
-
-    full_path = '/home/guanren/Multi-agent-competitive-environment/'+version_path+f'entropy_{episode}.png'
-    plt.savefig(full_path)
-    plt.close()

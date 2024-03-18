@@ -104,41 +104,52 @@ if isinstance(data, Batch):
 
 # new_input_data=data
 if args.scenario == 2:
-    v0_x = 1*math.cos(1.19)
+    v0_x = 1*math.cos(1.28)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.7, v0_x, v0_y, 1.19, 2665, -2410)
+    new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 1.28, 2673, -2410)
     v0_x = 1*math.cos(-1.95)
     v0_y = -math.sqrt(1**2-v0_x**2)
     new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
     v0_x = -1*math.cos(-0.33)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,-0.7, v0_x, v0_y, -0.33, 2725, -2386)
+    new_input_data=add_new_agent(new_input_data,-0.6, v0_x, v0_y, -0.33, 2725, -2381)
 elif args.scenario == 1:
     v0_x = 1*math.cos(1.9338)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.7, v0_x, v0_y, 1.9338, 5257.3, 325)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.9338, 5250, 345)
     v0_x = 1*math.cos(5.07)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.7, v0_x, v0_y, 5.07, 5235, 385)
+    new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, 5.07, 5227, 407)
     v0_x = 1*math.cos(5.07)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.7, v0_x, v0_y, 5.07, 5229.7, 411)
-else:
-    # new_input_data=add_new_agent(data,0, 0, 0, 1.57, -8340, -813)
+    new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 5.07, 5229.7, 411)
+elif args.scenario == 3:
     v0_x = 1*math.cos(0.1)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,1.0, v0_x, v0_y, 0.1, -8379.8809, -828)
+    new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 0.1, -8383.5, -827)
     v0_x = -1*math.cos(3.18)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 3.18, -8315, -823)
-    v0_x = -1*math.cos(1.8)
+    new_input_data=add_new_agent(new_input_data,0.8, v0_x, v0_y, 3.18, -8315, -823)
+    v0_x = -1*math.cos(1.9)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,1.2, v0_x, v0_y, 1.8, -8339, -863)
+    new_input_data=add_new_agent(new_input_data,0.6, v0_x, v0_y, 1.9, -8339, -863)
     v0_x = 1*math.cos(4.76)
     v0_y = -math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,0.75, v0_x, v0_y, 4.76, -8345, -793)
+    new_input_data=add_new_agent(new_input_data,0.5, v0_x, v0_y, 4.76, -8345, -793)
+    new_input_data=add_new_agent(new_input_data,0, 0, 0, 1.57, -8340, -813)
+else:
+    v0_x = 1*math.cos(-0.6)
+    v0_y = -math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(data,0.1, v0_x, v0_y, -0.6, 691, -904)
+    v0_x = 1*math.cos(1.3)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, 1.3, 695, -950)
+    v0_x = 1*math.cos(3.2)
+    v0_y = math.sqrt(1**2-v0_x**2)
+    new_input_data=add_new_agent(new_input_data,0.1, v0_x, v0_y, 3.2, 735, -919)
+    new_input_data=add_new_agent(new_input_data,0, 0, 0, 1.0, 698, -924.5)
     
-model_state_dict = torch.load('checkpoints/version_44/CCE-MASAC_episode500_epoch10_beta1e-2_seed666_scenario2.ckpt')
+model_state_dict = torch.load('./checkpoints/version_1/CCE-MASAC_beta1e-1_seed666_scenario3.ckpt')
 
 offset=config['offset']
 if 'MASAC' not in config['algorithm']:
@@ -149,6 +160,10 @@ if 'MASAC' not in config['algorithm']:
                 device = model.device,
                 offset = offset
         ) for _ in range(config['agent_number'])]
+    for i in range(config['agent_number']):
+        agents[i].pi.load_state_dict(model_state_dict[f'agent_{i}_pi'])
+        agents[i].pi.eval()
+
 else:
     agents = [MASAC(
           state_dim=model.num_modes*config['hidden_dim'],
@@ -158,16 +173,16 @@ else:
           offset = offset
     ) for _ in range(config['agent_number'])]
 
+    for i in range(config['agent_number']):
+        agents[i].actor.load_state_dict(model_state_dict[f'agent_{i}_actor'])
+        agents[i].actor.eval()
+
 choose_agent = []    
 agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()
 choose_agent.append(agent_index)
 for i in range(config['agent_number']-1):
     choose_agent.append(data['agent']['num_nodes']+i)
-
-for i in range(config['agent_number']):
-    agents[i].actor.load_state_dict(model_state_dict[f'agent_{i}_actor'])
-    agents[i].actor.eval()
-
+    
 with torch.no_grad():
     for episode in tqdm(range(config['episodes'])):
         scale = 0.0001
@@ -207,10 +222,10 @@ with torch.no_grad():
         for j in range(config['agent_number']):
             state_temp_list.append(global_state[choose_agent[j]])
 
-        for i in range(40,110):
+        for i in range(0,110):
             if i<50:
                 if episode == config['episodes'] - 1:
-                    plot_traj_with_data(new_data,scenario_static_map,agent_number=config['agent_number'], bounds=80,t=i)
+                    plot_traj_with_data(new_data,scenario_static_map,agent_number=config['agent_number'], bounds=100,t=i)
             else:
                 if i%offset==0:
                     true_trans_position_refine=new_true_trans_position_refine
@@ -226,7 +241,7 @@ with torch.no_grad():
                         sample_action_list.append(sample_action)
 
                     best_mode = pi_eval.argmax(dim=-1)
-                    for j in range(config['agent_number']):
+                    for j in range(0, config['agent_number']):
                         l2_norm = (torch.norm(auto_pred['loc_refine_pos'][choose_agent[j],:,:offset, :2] -
                                             sample_action_list[j][:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask_list[j][i-model.num_historical_steps:i-model.num_historical_steps+offset].unsqueeze(0)).sum(dim=-1)
                         action_suggest_index=l2_norm.argmin(dim=-1)
@@ -272,16 +287,16 @@ with torch.no_grad():
                       #       print(agent.value(next_state.flatten(start_dim=0).unsqueeze(0)))
                     pi_eval = F.softmax(auto_pred['pi'], dim=-1)
                     if episode == config['episodes'] - 1:
-                        plot_traj_with_data(new_data,scenario_static_map,agent_number=config['agent_number'], bounds=80,t=50-offset)
-                        for j in range(6):
-                            xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                            plt.plot(xy[j, ..., 0], xy[j, ..., 1])
+                        plot_traj_with_data(new_data,scenario_static_map,agent_number=config['agent_number'], bounds=100,t=50-offset)
+                        # for j in range(6):
+                        #     xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                        #     plt.plot(xy[j, ..., 0], xy[j, ..., 1])
                 else:
                     if episode == config['episodes'] - 1:
-                        plot_traj_with_data(new_data,scenario_static_map,agent_number=config['agent_number'], bounds=80,t=50-offset+i%offset)
-                        for j in range(6):
-                            xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
-                            plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
+                        plot_traj_with_data(new_data,scenario_static_map,agent_number=config['agent_number'], bounds=100,t=50-offset+i%offset)
+                        # for j in range(6):
+                        #     xy = true_trans_position_refine[new_data["agent"]["category"] == 3][0].cpu()
+                        #     plt.plot(xy[j, i%offset:, 0], xy[j, i%offset:, 1])
 
             buf = io.BytesIO()
             plt.savefig(buf, format="png")

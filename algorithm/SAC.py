@@ -109,6 +109,8 @@ class SAC:
         self.tau = config['tau']
         self.kld_weight = config['kld_weight']
         self.algorithm = config['algorithm']
+        self.mini_batch = config['mini_batch']
+        self.buffer_batchsize = config['buffer_batchsize']
         self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(),
                                                 lr=self.actor_lr)
         self.critic_1_optimizer = torch.optim.Adam(self.critic_1.parameters(),
@@ -133,7 +135,7 @@ class SAC:
         done = []
 
         with torch.no_grad():
-            for row in range(start_index, start_index+4):
+            for row in range(start_index, start_index+int(self.buffer_batchsize/self.mini_batch)):
                 s += transition[row]['states']
                 a += transition[row]['actions']
                 r += transition[row]['rewards']
@@ -174,7 +176,7 @@ class SAC:
             
             start_index = 0
             
-            for i in range(8):
+            for i in range(self.mini_batch):
 
                 states,  actions, rewards, next_states, dones= self.sample(transition, start_index)
                 states = torch.stack(states, dim=0).flatten(start_dim=1)
@@ -227,7 +229,7 @@ class SAC:
                 
                 torch.nn.utils.clip_grad_norm_(list(self.actor.parameters()) + list(self.critic_1.parameters()) + list(self.critic_2.parameters()), 0.5)
 
-                start_index += 4
+                start_index += int(self.buffer_batchsize/self.mini_batch)
 
                 self.soft_update(self.critic_1, self.target_critic_1)
                 self.soft_update(self.critic_2, self.target_critic_2)
