@@ -1,5 +1,5 @@
 import pytorch_lightning as pl
-import cv2
+import time
 
 import os, csv
 import torch, math
@@ -29,7 +29,7 @@ parser.add_argument("--accelerator", type=str, default="auto")
 parser.add_argument("--devices", type=int, default=1)
 parser.add_argument("--scenario", type=int, default=1)
 parser.add_argument("--id", type=str, default='0a0ef009-9d44-4399-99e6-50004d345f34')
-parser.add_argument("--ckpt_path", default="checkpoints/epoch=15-step=49984.ckpt", type=str)
+parser.add_argument("--ckpt_path", default="checkpoints/epoch=10-step=274879.ckpt", type=str)
 parser.add_argument("--RL_config", default="MASAC_episode500_epoch20_beta1e-1_seed1234", type=str)
 args = parser.parse_args()
 
@@ -83,13 +83,13 @@ new_input_data=data
 if args.scenario == 2:
     v0_x = 1*math.cos(1.28)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(data,0.5, v0_x, v0_y, 1.28, 2673, -2410)
+    new_input_data=add_new_agent(data,0.3, v0_x, v0_y, 1.28, 2673, -2410)
     v0_x = 1*math.cos(-1.95)
     v0_y = -math.sqrt(1**2-v0_x**2)
     new_input_data=add_new_agent(new_input_data,0.3, v0_x, v0_y, -1.95, 2693, -2340)
     v0_x = -1*math.cos(-0.33)
     v0_y = math.sqrt(1**2-v0_x**2)
-    new_input_data=add_new_agent(new_input_data,-0.6, v0_x, v0_y, -0.33, 2725, -2381)
+    new_input_data=add_new_agent(new_input_data,-0.3, v0_x, v0_y, -0.33, 2725, -2381)
 elif args.scenario == 1:
     v0_x = 1*math.cos(1.9338)
     v0_y = math.sqrt(1**2-v0_x**2)
@@ -193,7 +193,8 @@ for episode in tqdm(range(config['episodes'])):
 
     cumulative_reward.append(discounted_return_list)
 
-save_reward(args.RL_config+'_scenario'+str(args.scenario), 'figures/version_7/', cumulative_reward, config['agent_number'])
+current_time = time.strftime("%Y%m%d_%H%M%S", time.localtime())
+save_reward(args.RL_config+'_scenario'+str(args.scenario)+'_'+current_time, 'figures/version_8/', cumulative_reward, config['agent_number'])
 # if config['agent_number'] > 1:
 #     for i in range(config['agent_number']):
 #         save_gap(args.RL_config+'_scenario'+str(args.scenario)+'_CCE-GAP_agent'+str(i+1), 'figures/version_6/', v_array[i].tolist())
@@ -216,5 +217,5 @@ else:
         model_state_dict[f'agent_{i}_critic'] = critic_state_dict
 
 # next_version_path = create_dir(base_path = 'checkpoints/')
-torch.save(model_state_dict, 'checkpoints/version_7/'+args.RL_config+'_scenario'+str(args.scenario)+'.ckpt')
+torch.save(model_state_dict, 'checkpoints/version_8/'+args.RL_config+'_scenario'+str(args.scenario)+'_'+current_time+'.ckpt')
 

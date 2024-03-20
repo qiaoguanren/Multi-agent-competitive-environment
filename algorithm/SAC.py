@@ -7,7 +7,7 @@ import numpy as np
 from tqdm import tqdm
 
 
-def layer_init(layer, std=np.sqrt(2), bias_const=1.0):
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
         torch.nn.init.orthogonal_(layer.weight, std)
         torch.nn.init.constant_(layer.bias, bias_const)
         return layer
@@ -25,12 +25,12 @@ class Policy(nn.Module):
     def forward(self, state, scale):
         mean = self.f(state) + scale
         mean = torch.cumsum(mean.reshape(-1,6,5,2), dim=-2)
-        mean = mean[:, -1, :, :]
+        mean, _ = torch.min(mean, dim=1, keepdim=True)
         mean = mean.flatten(start_dim = 1)
 
         b = self.f(state)
         b = torch.cumsum(F.elu_(b.reshape(-1,6,5,2),alpha = 1.0) + 1.0, dim=-2) + 0.1
-        b = b[:, -1, :, :]
+        b, _ = torch.min(b, dim=1, keepdim=True)
         b = b.flatten(start_dim = 1)
 
         # epsilon = 1e-6

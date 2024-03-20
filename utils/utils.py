@@ -211,9 +211,11 @@ def add_new_agent(data, a, v0_x, v0_y, heading, x0, y0):
     data['agent']['ptr'][1]+=1    #ptr
     return data
 
-def reward_function(data,new_data,model,agent_index, agent_number):
+def reward_function(data,new_data,model,agent_index):
                 
-        reward1 = reward2 = reward3 = 0
+        reward = 0
+        cost = 0
+        flag = 0
         gt = data['agent']['position'][agent_index, model.num_historical_steps+model.num_future_steps-1:model.num_historical_steps+model.num_future_steps, :model.output_dim]
         start_point = data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
         # gt = torch.zeros(1,2).cuda()
@@ -223,25 +225,28 @@ def reward_function(data,new_data,model,agent_index, agent_number):
         # pre_position = new_data['agent']['position'][agent_index, model.num_historical_steps-2:model.num_historical_steps-1, :model.output_dim]
 
         # delta_distance = gt-current_position
-        l2_norm_current_distance = torch.norm(current_position - gt, p=2, dim=-1)
+        l1_norm_current_distance = torch.norm(current_position - gt, p=1, dim=-1)
         # l2_norm_pre_distance = torch.norm(gt - pre_position, p=2, dim=-1)
-        total_distance = torch.norm(gt - start_point, p=2, dim=-1)
-        travel_distance = torch.norm(current_position - start_point, p=2, dim=-1)
+        total_distance = torch.norm(gt - start_point, p=1, dim=-1)
+        travel_distance = torch.norm(current_position - start_point, p=1, dim=-1)
         if travel_distance<total_distance:
-            reward1 = math.log(travel_distance/total_distance)
+            reward = math.log(travel_distance/total_distance)
         else:
-            reward1 = l2_norm_current_distance
+            reward = l1_norm_current_distance
         
-        # for i in range(new_data['agent']['num_nodes']):
-        #     if i==agent_index:
-        #         continue
-        #     distance = torch.norm(new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-new_data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],dim=-1)
-        #     if distance < 5e-2:
-        #         break
-        # if distance < 5e-2:
-        #     reward2 = -100
+        for i in range(new_data['agent']['num_nodes']):
+            if i==agent_index:
+                continue
+            distance = torch.norm(new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-new_data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],p=2, dim=-1)
+            if distance < 15:
+                flag = 1
+                break
+        if flag:
+            cost = -50
+        else:
+            cost = 0.01
         
-        return reward1+reward2+reward3
+        return reward + cost
 
 def seed_everything(seed):
     random.seed(seed)
@@ -342,22 +347,23 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
                 sample_action_list.append(sample_action)
 
             best_mode = pi_eval.argmax(dim=-1)
-            action_suggest_index_list = []
-            for i in range(config['agent_number']):
-                l2_norm = (torch.norm(auto_pred['loc_refine_pos'][choose_agent[i],:,:offset, :2] -
-                                    sample_action_list[i][:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask_list[i][timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
-                action_suggest_index=l2_norm.argmin(dim=-1)
-                best_mode[choose_agent[i]] = action_suggest_index
-                action_suggest_index_list.append(action_suggest_index)
+            # action_suggest_index_list = []
+            # for i in range(config['agent_number']):
+            #     l2_norm = (torch.norm(auto_pred['loc_refine_pos'][choose_agent[i],:,:offset, :2] -
+            #                         sample_action_list[i][:offset, :2].unsqueeze(0), p=2, dim=-1) * reg_mask_list[i][timestep:timestep+offset].unsqueeze(0)).sum(dim=-1)
+            #     action_suggest_index=l2_norm.argmin(dim=-1)
+            #     best_mode[choose_agent[i]] = action_suggest_index
+            #     action_suggest_index_list.append(action_suggest_index)
 
             action_list = []
+
             for i in range(config['agent_number']):
-                action = auto_pred['loc_refine_pos'][choose_agent[i],action_suggest_index_list[i],:offset, :2].flatten(start_dim = 1)
-                action_list.append(action)
+                auto_pred['loc_refine_pos'][choose_agent[i],best_mode[choose_agent[i]], :offset, :model.output_dim] = sample_action_list[i]
+                action_list.append(auto_pred['loc_refine_pos'][choose_agent[i],best_mode[choose_agent[i]],:offset, :model.output_dim].flatten(start_dim = 1))
 
             ground_b_list = []
             for i in range(config['agent_number']):
-                ground_b = auto_pred['scale_refine_pos'][choose_agent[i],action_suggest_index_list[i],:offset, :2].flatten(start_dim = 1)
+                ground_b = auto_pred['scale_refine_pos'][choose_agent[i],best_mode[choose_agent[i]],:offset, :model.output_dim].flatten(start_dim = 1)
                 ground_b_list.append(ground_b)
 
             new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
@@ -378,7 +384,7 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
             else:
                 transition_list[batch]['dones'].append(torch.tensor(0).cuda())
             for i in range(config['agent_number']):
-                reward = reward_function(new_input_data.clone(),new_data.clone(),model,choose_agent[i], config['agent_number'])
+                reward = reward_function(new_input_data.clone(),new_data.clone(),model,choose_agent[i])
                 transition_list[batch]['rewards'][i].append(torch.tensor([reward]).cuda())
                      
             state_temp_list = next_state_temp_list

@@ -319,8 +319,8 @@ def _plot_actor_tracks_with_data(ax: plt.Axes, data, agent_number, timestep: int
               ec='b')
         elif i==data['agent']['av_index']:
             track_color = _AV_COLOR
-        elif i==data['agent']['num_nodes']-agent_number and i!=data['agent']['num_nodes']-1:
-        # elif i==data['agent']['num_nodes']-agent_number+1:
+        # elif i==data['agent']['num_nodes']-agent_number and i!=data['agent']['num_nodes']-1:
+        elif i==data['agent']['num_nodes']-agent_number+1:
                 track_color = _FOCAL_AGENT_COLOR
                 _plot_polylines([actor_trajectory], color="black", line_width=2)
                 ax.arrow(actor_trajectory[-1,0], actor_trajectory[-1,1], data['agent']['velocity'][i,timestep,0].cpu(),data['agent']['velocity'][i,timestep,1].cpu(),
@@ -380,24 +380,24 @@ def  plot_traj_with_data(data,scenario_static_map,agent_number,t=50,bounds=80.0)
     plt.xlim(
         # 5256 - bounds,
         # 5265 + bounds,
-        # 2640 - bounds,
-        # 2670 + bounds,
+        2640 - bounds,
+        2670 + bounds,
         # 690 - bounds,
         # 695 + bounds,
-        -8339.5 - bounds,
-        -8339.5 + bounds,
+        # -8339.5 - bounds,
+        # -8339.5 + bounds,
         # plot_bounds[0] - bounds,
         # plot_bounds[1] + bounds,
     )
     plt.ylim(
         # 295 - bounds,
         # 330 + bounds,
-        # -2365 - bounds,
-        # -2360 + bounds,
+        -2365 - bounds,
+        -2360 + bounds,
         # -911 - bounds,
         # -900 + bounds,
-        -840 - bounds,
-        -830 + bounds,
+        # -840 - bounds,
+        # -830 + bounds,
         # plot_bounds[2] - bounds,
         # plot_bounds[3] + bounds,
     )

@@ -26,7 +26,7 @@ class MASAC(SAC):
     def _init_density_model(self, state_dim, hidden_dim):
         # Creat density model
         modules = []
-        for i in range(2):
+        for i in range(3):
             modules += [
                 MADE(num_inputs=state_dim,
                      num_hidden=hidden_dim,
