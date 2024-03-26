@@ -18,12 +18,26 @@ class Policy(nn.Module):
             nn.Linear(hidden_dim, action_dim-5*6),
         )
 
-        self.head = nn.Sequential(
+        self.scale = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, action_dim-5*6),
+        )
+
+        self.loc_head = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
             nn.Linear(hidden_dim, action_dim//3),
-        )
+        ) 
+
+        self.conc_head = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, action_dim//3),
+        ) 
         self.apply(weight_init)
     
     def forward(self, state, noise):
@@ -31,7 +45,7 @@ class Policy(nn.Module):
         mean_loc = self.pos(state) + noise
         mean_loc = torch.cumsum(mean_loc.reshape(-1,6,5,2), dim=-2)
         mean_loc = mean_loc[:,0,:,:]
-        mean_head = self.head(state) + noise
+        mean_head = self.loc_head(state) + noise
         mean_head = torch.cumsum(torch.tanh(mean_head.reshape(-1,6,5,1)) * math.pi,
                                             dim=-2)
         mean_head = mean_head[:,0,:,:]
@@ -39,10 +53,10 @@ class Policy(nn.Module):
         mean_head = mean_head.flatten(start_dim = 1)
         mean = torch.cat([mean_loc, mean_head], dim=-1)
 
-        b_loc = self.pos(state) + noise
+        b_loc = self.scale(state) + noise
         b_loc = torch.cumsum(F.elu_(b_loc.reshape(-1,6,5,2),alpha = 1.0) + 1.0, dim=-2) + 0.1
         b_loc = b_loc[:,0,:,:]
-        b_head = self.head(state) + noise
+        b_head = self.conc_head(state) + noise
         b_head = 1.0 / (torch.cumsum(F.elu_(b_head.reshape(-1,6,5,1)) + 1.0,
                                                 dim=-2) + 0.02)
         b_head = b_head[:,0,:,:]

@@ -69,6 +69,7 @@ for param in model.encoder.parameters():
 for param in model.decoder.parameters():
         param.requires_grad = False
 
+
 if isinstance(data, Batch):
     data['agent']['av_index'] += data['agent']['ptr'][:-1]
 
@@ -139,6 +140,12 @@ else:
           device = model.device,
           offset = offset
     ) for _ in range(config['agent_number'])]
+    
+for i in range(config['agent_number']):
+    agents[i].actor.pos.parameters = model.decoder.to_loc_refine_pos.parameters
+    agents[i].actor.scale.parameters = model.decoder.to_scale_refine_pos.parameters
+    agents[i].actor.loc_head.parameters = model.decoder.to_loc_refine_head.parameters
+    agents[i].actor.conc_head.parameters = model.decoder.to_conc_refine_head.parameters
 
 choose_agent = []    
 agent_index = torch.nonzero(data['agent']['category']==3,as_tuple=False).item()

@@ -337,7 +337,7 @@ def process_batch(batch, config, new_input_data, model, agents, choose_agent, no
             action_list = []
 
             for i in range(config['agent_number']):
-                scale,sample_action, log_prob = agents[i].choose_action(state_temp_list[i], noise)
+                mean, scale,sample_action, log_prob = agents[i].choose_action(state_temp_list[i], noise)
                 sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim+1)
 
                 auto_pred['loc_refine_pos'][choose_agent[i],best_mode[choose_agent[i]], :offset, :model.output_dim] = sample_action[..., :model.output_dim]
