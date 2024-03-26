@@ -8,13 +8,13 @@ import numpy as np
 import torch.nn.functional as F
 from algorithm.mappo import MAPPO
 from algorithm.masac import MASAC
+from algorithm.constrainted_cce_masac import Constrainted_CCE_MASAC
 from torch_geometric.loader import DataLoader
 from argparse import ArgumentParser
 from datasets import ArgoverseV2Dataset
 from predictors.autoval import AntoQCNet
-from predictors.environment import WorldModel
 from transforms import TargetBuilder
-from utils.utils import add_new_agent, process_batch, save_reward, seed_everything, save_gap
+from utils.utils import add_new_agent, process_batch, save_reward, seed_everything
 from torch_geometric.data import Batch
 from tqdm import tqdm
 
@@ -42,9 +42,6 @@ seed_everything(config['seed'])
 model = {
     "QCNet": AntoQCNet,
 }[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
-environment = {
-    "QCNet": WorldModel,
-}[args.model].load_from_checkpoint(checkpoint_path=args.ckpt_path)
 val_dataset = {
     "argoverse_v2": ArgoverseV2Dataset,
 }[model.dataset](
@@ -70,10 +67,6 @@ data = next(it)
 for param in model.encoder.parameters():
         param.requires_grad = False
 for param in model.decoder.parameters():
-        param.requires_grad = False
-for param in environment.encoder.parameters():
-        param.requires_grad = False
-for param in environment.decoder.parameters():
         param.requires_grad = False
 
 if isinstance(data, Batch):
@@ -139,9 +132,9 @@ if 'MAPPO' in config['algorithm']:
                 offset = offset
         ) for _ in range(config['agent_number'])]
 else:
-    agents = [MASAC(
+    agents = [Constrainted_CCE_MASAC(
           state_dim=model.num_modes*config['hidden_dim'],
-          action_dim = model.output_dim*offset*6,
+          action_dim = (model.output_dim+1)*offset*6,
           config = config,
           device = model.device,
           offset = offset
@@ -157,22 +150,22 @@ v_array = np.empty((config['agent_number'], config['episodes']))
 
 for episode in tqdm(range(config['episodes'])):
     
-    scale=1/config['episodes']
+    noise=1/config['episodes']
 
     transition_list = [{
                 'states': [[]for _  in range(config['agent_number'])],
                 'actions': [[]for _  in range(config['agent_number'])],
                 'next_states': [[]for _  in range(config['agent_number'])],
                 'rewards': [[]for _  in range(config['agent_number'])],
-                'ground_b': [[] for _  in range(config['agent_number'])],
+                'magnet': [[] for _  in range(config['agent_number'])],
+                'costs': [[] for _  in range(config['agent_number'])],
                 'dones': []} for _ in range(config['buffer_batchsize'])]
     
     for batch in range(config['buffer_batchsize']):
-        process_batch(batch, config, new_input_data, model, environment, agents, choose_agent, scale, offset, transition_list)
+        process_batch(batch, config, new_input_data, model, agents, choose_agent, noise, offset, transition_list)
 
     for i in range(config['agent_number']):
-        agents[i].update(transition_list, config['buffer_batchsize'], scale, i)
-        # v_array[i][episode] = v
+        agents[i].update(transition_list, config['buffer_batchsize'], noise, i)
 
     discounted_return_list = []
     discounted_return = 0

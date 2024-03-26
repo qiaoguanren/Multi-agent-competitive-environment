@@ -33,6 +33,7 @@ from metrics import minFDE
 from metrics import minFHE
 from modules import QCNetDecoder
 from modules import QCNetEncoder
+from modules.gameformer_decoder import Decoder
 
 try:
     from av2.datasets.motion_forecasting.eval.submission import ChallengeSubmission
@@ -102,6 +103,8 @@ class QCNet(pl.LightningModule):
         self.T_max = T_max
         self.submission_dir = submission_dir
         self.submission_file_name = submission_file_name
+        # self.gf_decoder=Decoder(num_modes,num_future_steps,6)
+        # self.gf_encoder=nn.Linear(num_modes*hidden_dim,256)
 
         self.encoder = QCNetEncoder(
             dataset=dataset,

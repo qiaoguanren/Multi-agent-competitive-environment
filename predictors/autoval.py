@@ -33,7 +33,6 @@ from metrics import minAHE
 from metrics import minFDE
 from metrics import minFHE
 from modules import QCNetDecoder
-from modules.qcnet_decoder2 import AutoQCNetDecoder
 from predictors.qcnet import QCNet
 from utils import wrap_angle
 

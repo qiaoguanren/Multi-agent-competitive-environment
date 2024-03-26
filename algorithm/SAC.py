@@ -1,37 +1,54 @@
 import torch
-import math, random
+import math
+from copy import deepcopy
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal, Laplace
 import numpy as np
 from tqdm import tqdm
-
-
-def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
-        torch.nn.init.orthogonal_(layer.weight, std)
-        torch.nn.init.constant_(layer.bias, bias_const)
-        return layer
+from utils import weight_init
 
 class Policy(nn.Module):
     def __init__(self, state_dim, hidden_dim, action_dim):
         super(Policy, self).__init__()
-        self.f = nn.Sequential(
-            layer_init(nn.Linear(state_dim, hidden_dim)),
+        self.pos = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
-            layer_init(nn.Linear(hidden_dim, action_dim)),
+            nn.Linear(hidden_dim, action_dim-5*6),
         )
-    
-    def forward(self, state, scale):
-        mean = self.f(state) + scale
-        mean = torch.cumsum(mean.reshape(-1,6,5,2), dim=-2)
-        mean, _ = torch.min(mean, dim=1, keepdim=True)
-        mean = mean.flatten(start_dim = 1)
 
-        b = self.f(state)
-        b = torch.cumsum(F.elu_(b.reshape(-1,6,5,2),alpha = 1.0) + 1.0, dim=-2) + 0.1
-        b, _ = torch.min(b, dim=1, keepdim=True)
-        b = b.flatten(start_dim = 1)
+        self.head = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, action_dim//3),
+        )
+        self.apply(weight_init)
+    
+    def forward(self, state, noise):
+
+        mean_loc = self.pos(state) + noise
+        mean_loc = torch.cumsum(mean_loc.reshape(-1,6,5,2), dim=-2)
+        mean_loc = mean_loc[:,0,:,:]
+        mean_head = self.head(state) + noise
+        mean_head = torch.cumsum(torch.tanh(mean_head.reshape(-1,6,5,1)) * math.pi,
+                                            dim=-2)
+        mean_head = mean_head[:,0,:,:]
+        mean_loc = mean_loc.flatten(start_dim = 1)
+        mean_head = mean_head.flatten(start_dim = 1)
+        mean = torch.cat([mean_loc, mean_head], dim=-1)
+
+        b_loc = self.pos(state) + noise
+        b_loc = torch.cumsum(F.elu_(b_loc.reshape(-1,6,5,2),alpha = 1.0) + 1.0, dim=-2) + 0.1
+        b_loc = b_loc[:,0,:,:]
+        b_head = self.head(state) + noise
+        b_head = 1.0 / (torch.cumsum(F.elu_(b_head.reshape(-1,6,5,1)) + 1.0,
+                                                dim=-2) + 0.02)
+        b_head = b_head[:,0,:,:]
+        b_loc = b_loc.flatten(start_dim = 1)
+        b_head = b_head.flatten(start_dim = 1)
+        b = torch.cat([b_loc, b_head], dim=-1)
 
         # epsilon = 1e-6
         # mean = torch.where(torch.isnan(mean), torch.full_like(mean, epsilon), mean)
@@ -43,6 +60,7 @@ class Policy(nn.Module):
         log_prob = dist.log_prob(normal_sample)
         log_prob = log_prob - torch.log(1 - torch.tanh(normal_sample).pow(2) + 1e-7)
         log_prob = log_prob.sum(1, keepdim=True)
+
         # logp_pi = dist.log_prob(normal_sample).sum(axis=-1)
         # logp_pi -= (2*(np.log(2) - normal_sample - F.softplus(-2*normal_sample))).sum(axis=1)
         # log_prob = logp_pi
@@ -53,11 +71,12 @@ class QValueNet(nn.Module):
     def __init__(self, state_dim, action_dim, hidden_dim, agent_number):
         super(QValueNet, self).__init__()
         self.f = nn.Sequential(
-            layer_init(nn.Linear(agent_number*state_dim+(action_dim//6), hidden_dim)),
+            nn.Linear(agent_number*state_dim+(action_dim//6), hidden_dim),
             nn.LayerNorm(hidden_dim),
             nn.ReLU(inplace=True),
-            layer_init(nn.Linear(hidden_dim, 1)),
+            nn.Linear(hidden_dim, 1),
         )
+        self.apply(weight_init)
 
     def forward(self, states, actions):
 
@@ -93,14 +112,21 @@ class SAC:
         self.actor = Policy(state_dim, self.hidden_dim, action_dim).to(device)
         self.critic_1 = QValueNet(state_dim, action_dim, self.hidden_dim, self.agent_number).to(device)
         self.critic_2 = QValueNet(state_dim, action_dim, self.hidden_dim, self.agent_number).to(device)
-        # self.critic_v = V_Net(state_dim, self.hidden_dim).to(device)
+        self.critic_1_cost = QValueNet(state_dim, action_dim, self.hidden_dim, self.agent_number).to(device)
+        self.critic_2_cost = QValueNet(state_dim, action_dim, self.hidden_dim, self.agent_number).to(device)
         self.target_critic_1 = QValueNet(state_dim,action_dim,self.hidden_dim, self.agent_number).to(device)
         self.target_critic_2 = QValueNet(state_dim,action_dim,self.hidden_dim, self.agent_number).to(device)
-        # self.target_critic_v = V_Net(state_dim,self.hidden_dim).to(device)
+        self.target_critic_1_cost = QValueNet(state_dim,action_dim,self.hidden_dim, self.agent_number).to(device)
+        self.target_critic_2_cost = QValueNet(state_dim,action_dim,self.hidden_dim, self.agent_number).to(device)
+
+        self.target_critic_1_cost.load_state_dict(self.critic_1_cost.state_dict())
+        self.target_critic_2_cost.load_state_dict(self.critic_2_cost.state_dict())
         self.target_critic_1.load_state_dict(self.critic_1.state_dict())
         self.target_critic_2.load_state_dict(self.critic_2.state_dict())
+
         self.actor_lr = config['actor_learning_rate']
         self.critic_lr = config['critic_learning_rate']
+        self.constrainted_critic_lr = config['constrainted_critic_learning_rate']
         self.alpha_learning_rate = config['alpha_learning_rate']
         self.gamma = config['gamma']
         self.device = device
@@ -111,16 +137,17 @@ class SAC:
         self.algorithm = config['algorithm']
         self.mini_batch = config['mini_batch']
         self.buffer_batchsize = config['buffer_batchsize']
+
         self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(),
                                                 lr=self.actor_lr)
         self.critic_1_optimizer = torch.optim.Adam(self.critic_1.parameters(),
                                                    lr=self.critic_lr)
         self.critic_2_optimizer = torch.optim.Adam(self.critic_2.parameters(),
                                                    lr=self.critic_lr)
-        # self.critic_v_optimizer = torch.optim.Adam(self.critic_v.parameters(),
-        #                                            lr=self.critic_lr)
+        self.critic_1_cost_optimizer = torch.optim.Adam(self.critic_1_cost.parameters(), lr=self.constrainted_critic_lr)
+        self.critic_2_cost_optimizer = torch.optim.Adam(self.critic_2_cost.parameters(), lr=self.constrainted_critic_lr)
 
-        self.log_alpha = torch.tensor(np.log(0.005), dtype=torch.float)
+        self.log_alpha = torch.tensor(np.log(0.1), dtype=torch.float)
         self.log_alpha.requires_grad = True
         self.log_alpha_optimizer = torch.optim.Adam([self.log_alpha],
                                                     lr=self.alpha_learning_rate)
@@ -145,15 +172,15 @@ class SAC:
         return s, a, r, s_next, done
     
 
-    def choose_action(self, state, scale):
+    def choose_action(self, state, noise):
         with torch.no_grad():
             state = torch.flatten(state,start_dim=0).unsqueeze(0)
-            _,_,action, _ = self.actor(state, scale)
+            _,_,action, _ = self.actor(state, noise)
         return action
     
-    def get_target(self, rewards, next_states, dones, scale):
+    def get_target(self, rewards, next_states, dones, noise):
         with torch.no_grad():
-            _,_,actions, log_prob = self.actor(next_states, scale)
+            _,_,actions, log_prob = self.actor(next_states, noise)
             entropy = -log_prob
             q1_value = self.target_critic_1(next_states, actions)
             q2_value = self.target_critic_2(next_states, actions)
@@ -170,7 +197,7 @@ class SAC:
             param_target.data.copy_(param_target.data * (1.0 - self.tau) +
                                     param.data * self.tau)
     
-    def update(self, transition, scale, agent_index):
+    def update(self, transition, noise, agent_index):
         
         for epoch in tqdm(range(self.epochs)):
             
@@ -187,13 +214,13 @@ class SAC:
 
                 rewards = (rewards - rewards.mean())/(rewards.std() + 1e-8)
 
-                td_target = self.get_target(rewards, next_states, dones, scale)
+                td_target = self.get_target(rewards, next_states, dones, noise)
                 critic_1_loss = torch.mean(
                     F.mse_loss(self.critic_1(states, actions), td_target.detach()))
                 critic_2_loss = torch.mean(
                     F.mse_loss(self.critic_2(states, actions), td_target.detach()))
 
-                _,_,new_actions, log_prob = self.actor(states, scale)
+                _,_,new_actions, log_prob = self.actor(states, noise)
                 
                 entropy = -log_prob
                 q1_value = self.critic_1(states, new_actions)

@@ -1,10 +1,10 @@
 algorithm: 'CCE-MASAC'
 seed: 1000
-agent_number: 5
+agent_number: 4
 actor_learning_rate : 0.00005
 critic_learning_rate: 0.0001
+constrainted_critic_learning_rate: 0.0001
 gamma: 0.99
-lamda: 0.97
 hidden_dim: 128
 epochs: 10
 buffer_batchsize: 32
@@ -16,4 +16,5 @@ density_learning_rate: 0.0001
 tau: 0.005
 beta_coef: 0.1
 kld_weight: 0.00025
-eta_coef: 0.05
+eta_coef1: 0.05
+eta_coef2: 0.05

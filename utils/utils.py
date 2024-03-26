@@ -214,8 +214,7 @@ def add_new_agent(data, a, v0_x, v0_y, heading, x0, y0):
 def reward_function(data,new_data,model,agent_index):
                 
         reward = 0
-        cost = 0
-        flag = 0
+
         gt = data['agent']['position'][agent_index, model.num_historical_steps+model.num_future_steps-1:model.num_historical_steps+model.num_future_steps, :model.output_dim]
         start_point = data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]
         # gt = torch.zeros(1,2).cuda()
@@ -234,19 +233,21 @@ def reward_function(data,new_data,model,agent_index):
         else:
             reward = l1_norm_current_distance
         
-        for i in range(new_data['agent']['num_nodes']):
-            if i==agent_index:
-                continue
-            distance = torch.norm(new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-new_data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],p=2, dim=-1)
-            if distance < 15:
-                flag = 1
-                break
-        if flag:
-            cost = -50
-        else:
-            cost = 0.01
-        
-        return reward + cost
+        return reward
+
+def cost_function(new_data,model,agent_index):
+    cost_limit = 15
+    max_distance = 0
+    for i in range(new_data['agent']['num_nodes']):
+        if i==agent_index:
+            continue
+        distance = torch.norm(new_data['agent']['position'][agent_index, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim]-new_data['agent']['position'][i, model.num_historical_steps-1:model.num_historical_steps, :model.output_dim],p=2, dim=-1)
+        if distance > max_distance:
+            max_distance = distance
+    if max_distance >= cost_limit:
+        return 0
+    else:
+        return max_distance - cost_limit
 
 def seed_everything(seed):
     random.seed(seed)
@@ -285,17 +286,7 @@ def save_reward(config_name, figure_folder, data_list, agent_number):
             for data in data_list:
                 writer.writerow([data])
 
-
-def save_gap(config_name, file_path, data_list):
-    
-    file_path = '/home/guanren/Multi-agent-competitive-environment/'+file_path+config_name+'.csv'
-
-    with open(file_path, mode='w', newline='') as file:
-        writer = csv.writer(file)
-
-        writer.writerow(data_list)
-
-def process_batch(batch, config, new_input_data, model, environment, agents, choose_agent, scale, offset, transition_list):
+def process_batch(batch, config, new_input_data, model, agents, choose_agent, noise, offset, transition_list):
     
         new_data=new_input_data.cuda().clone()
 
@@ -328,25 +319,35 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
         pi_eval = F.softmax(pi, dim=-1)
 
         state_temp_list = []
-        global_state = environment.decoder(new_data, environment.encoder(new_data))
+        global_state = pred['first_m']
         for i in range(config['agent_number']):
             state_temp_list.append(global_state[choose_agent[i]])
 
         for timestep in range(0,model.num_future_steps,offset):
 
-            true_trans_position_refine=new_true_trans_position_refine
-            reg_mask_list = []
-            for i in range(config['agent_number']):
-                reg_mask = new_data['agent']['predict_mask'][choose_agent[i], model.num_historical_steps:]
-                reg_mask_list.append(reg_mask)
+            # true_trans_position_refine=new_true_trans_position_refine
+            # reg_mask_list = []
+            # for i in range(config['agent_number']):
+            #     reg_mask = new_data['agent']['predict_mask'][choose_agent[i], model.num_historical_steps:]
+            #     reg_mask_list.append(reg_mask)
             
-            sample_action_list = []
-            for i in range(config['agent_number']):
-                sample_action = agents[i].choose_action(state_temp_list[i], scale)
-                sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim)
-                sample_action_list.append(sample_action)
-
             best_mode = pi_eval.argmax(dim=-1)
+
+            magnet_list = []
+            action_list = []
+
+            for i in range(config['agent_number']):
+                scale,sample_action, log_prob = agents[i].choose_action(state_temp_list[i], noise)
+                sample_action = sample_action.squeeze(0).reshape(-1,model.output_dim+1)
+
+                auto_pred['loc_refine_pos'][choose_agent[i],best_mode[choose_agent[i]], :offset, :model.output_dim] = sample_action[..., :model.output_dim]
+                auto_pred['loc_refine_head'][choose_agent[i],best_mode[choose_agent[i]], :offset] = sample_action[..., model.output_dim].unsqueeze(-1)
+                auto_pred['scale_refine_pos'][choose_agent[i],best_mode[choose_agent[i]], :offset, :model.output_dim] = scale[..., :model.output_dim]
+                auto_pred['conc_refine_head'][choose_agent[i],best_mode[choose_agent[i]], :offset] = scale[..., model.output_dim].unsqueeze(-1)
+                
+                action_list.append(sample_action)
+                magnet_list.append(log_prob)
+
             # action_suggest_index_list = []
             # for i in range(config['agent_number']):
             #     l2_norm = (torch.norm(auto_pred['loc_refine_pos'][choose_agent[i],:,:offset, :2] -
@@ -355,30 +356,19 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
             #     best_mode[choose_agent[i]] = action_suggest_index
             #     action_suggest_index_list.append(action_suggest_index)
 
-            action_list = []
-
-            for i in range(config['agent_number']):
-                auto_pred['loc_refine_pos'][choose_agent[i],best_mode[choose_agent[i]], :offset, :model.output_dim] = sample_action_list[i]
-                action_list.append(auto_pred['loc_refine_pos'][choose_agent[i],best_mode[choose_agent[i]],:offset, :model.output_dim].flatten(start_dim = 1))
-
-            ground_b_list = []
-            for i in range(config['agent_number']):
-                ground_b = auto_pred['scale_refine_pos'][choose_agent[i],best_mode[choose_agent[i]],:offset, :model.output_dim].flatten(start_dim = 1)
-                ground_b_list.append(ground_b)
-
             new_data, auto_pred, _, _, (new_true_trans_position_propose, new_true_trans_position_refine),(traj_propose, traj_refine) = get_auto_pred(
                 new_data, model, auto_pred["loc_refine_pos"][torch.arange(traj_propose.size(0)),best_mode], auto_pred["loc_refine_head"][torch.arange(traj_propose.size(0)),best_mode,:,0],offset,anchor=(init_origin,init_theta,init_rot_mat)
             )
 
             next_state_temp_list = []
-            global_next_state = environment.decoder(new_data, environment.encoder(new_data))
+            global_next_state = auto_pred['first_m']
             for i in range(config['agent_number']):
                 next_state_temp_list.append(global_next_state[choose_agent[i]])
             for i in range(config['agent_number']):
                 transition_list[batch]['states'][i].append(state_temp_list[i])
                 transition_list[batch]['actions'][i].append(action_list[i])
                 transition_list[batch]['next_states'][i].append(next_state_temp_list[i])
-                transition_list[batch]['ground_b'][i].append(ground_b_list[i])
+                transition_list[batch]['magnet'][i].append(magnet_list[i])
             if timestep == model.num_future_steps - offset:
                 transition_list[batch]['dones'].append(torch.tensor(1).cuda())
             else:
@@ -386,6 +376,8 @@ def process_batch(batch, config, new_input_data, model, environment, agents, cho
             for i in range(config['agent_number']):
                 reward = reward_function(new_input_data.clone(),new_data.clone(),model,choose_agent[i])
                 transition_list[batch]['rewards'][i].append(torch.tensor([reward]).cuda())
+                cost = cost_function(new_data.clone(),model,choose_agent[i])
+                transition_list[batch]['costs'][i].append(torch.tensor([cost]).cuda())
                      
             state_temp_list = next_state_temp_list
             pi_eval = F.softmax(auto_pred['pi'], dim=-1)

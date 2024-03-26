@@ -224,6 +224,8 @@ class QCNetDecoder(nn.Module):
                 m = m.reshape(self.num_modes, -1, self.hidden_dim).transpose(0, 1).reshape(-1, self.hidden_dim)
             m = self.m2m_propose_attn_layer(m, None, edge_index_m2m)
             m = m.reshape(-1, self.num_modes, self.hidden_dim)
+            if t==0:
+                first_m=m
             locs_propose_pos[t] = self.to_loc_propose_pos(m)
             scales_propose_pos[t] = self.to_scale_propose_pos(m)
             if self.output_head:
@@ -287,4 +289,5 @@ class QCNetDecoder(nn.Module):
             'loc_refine_head': loc_refine_head,
             'conc_refine_head': conc_refine_head,
             'pi': pi,
+            'first_m':first_m
         }
